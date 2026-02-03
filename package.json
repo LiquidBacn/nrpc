@@ -1,0 +1,35 @@
+{
+  "name": "nrpc",
+  "version": "0.0.0",
+  "description": "Hackable typed RPC",
+  "license": "ISC",
+  "author": "BVK",
+  "type": "module",
+  "exports": {
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "require": "./dist/server/index.cjs",
+      "import": "./dist/server/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "require": "./dist/client/index.cjs",
+      "import": "./dist/client/index.js"
+    },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "require": "./dist/shared/index.cjs",
+      "import": "./dist/shared/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build && tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18",
+    "zod": "^4.3.6"
+  }
+}
