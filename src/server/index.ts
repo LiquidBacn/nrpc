@@ -53,7 +53,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
 
     switch (route._tag) {
       case "q": {
-        let v;
+        let v: any;
         if (typeof route.validator === "function") {
           v = route.validator(arg);
         } else {
@@ -62,7 +62,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
         return route.method(c, v);
       }
       case "s": {
-        let v;
+        let v: any;
         if (typeof route.validator === "function") {
           v = route.validator(arg);
         } else {
@@ -105,7 +105,10 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
     send: (msg: NRPCResponse) => void,
     close: () => void,
   ) {
-    const activeSubs = new Set<string>();
+    const activeSubs = new Map<
+      string,
+      { paused: boolean; cbs: (() => void)[] }
+    >();
 
     const onMsg = async (msg: any) => {
       if (msg === null || typeof msg !== "object") {
@@ -145,20 +148,35 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
               }
               let rt = await route.method(c, v);
 
-              activeSubs.add(t.id);
+              activeSubs.set(t.id, { paused: false, cbs: [] });
               send({ id: t.id, type: "subscription.start" });
 
               try {
-                for await (let payload of rt) {
-                  send({ id: t.id, type: "subscription.data", payload });
-                  if (!activeSubs.has(t.id)) {
+                while (1) {
+                  let sub = activeSubs.get(t.id);
+                  if (!sub) {
+                    rt.return(undefined);
                     break;
                   }
+                  let item = await rt.next(
+                    sub.paused
+                      ? new Promise<void>((res) => {
+                          sub.cbs.push(res);
+                        })
+                      : undefined,
+                  );
+                  if (item.done) {
+                    break;
+                  }
+                  let payload = item.value;
+                  send({ id: t.id, type: "subscription.data", payload });
                 }
 
                 send({ id: t.id, type: "subscription.end" });
               } catch (error) {
                 send({ id: t.id, type: "subscription.error", error });
+              } finally {
+                activeSubs.delete(t.id);
               }
 
               return;
@@ -166,6 +184,21 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
           }
 
           throw new Error(`Path "${t.path.join(".")}" incomplete.`);
+        } else if (t.type == "subscription.end") {
+        } else if (t.type == "subscription.error") {
+        } else if (t.type == "subscription.pause") {
+          let sub = activeSubs.get(t.id);
+          if (sub) {
+            sub.paused = true;
+          }
+        } else if (t.type == "subscription.resume") {
+          let sub = activeSubs.get(t.id);
+          if (sub) {
+            let cbs = sub.cbs;
+            sub.cbs = [];
+            sub.paused = false;
+            cbs.forEach((a) => a());
+          }
         }
       } catch (error) {
         send({

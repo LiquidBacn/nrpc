@@ -10,6 +10,7 @@ type Sub = {
   data: ({ k: "v"; val: any } | { k: "e"; err: any })[];
   calls: Call[];
   done: boolean;
+  paused: boolean;
 };
 
 export function getClient<R extends Router>(
@@ -32,6 +33,12 @@ export function getClient<R extends Router>(
           call?.res({ value: data.val, done: false });
         } else if (data.k === "e") {
           call.rej(data.err);
+        }
+
+        if (sub.data.length < 5 && sub.paused) {
+          sub.paused = false;
+
+          send({ id, type: "subscription.resume" });
         }
       } else if (sub.done && sub.calls.length && !sub.data.length) {
         sub.calls.forEach((a) => a.res({ value: undefined, done: true }));
@@ -106,7 +113,7 @@ export function getClient<R extends Router>(
           },
         };
 
-        subs.set(t.id, { calls: [], data: [], done: false });
+        subs.set(t.id, { calls: [], data: [], done: false, paused: false });
 
         let call = inFlight.get(t.id);
         if (call) {
@@ -118,8 +125,13 @@ export function getClient<R extends Router>(
         let sub = subs.get(t.id);
         if (sub) {
           sub.data.push({ k: "v", val: t.payload });
-          subs.set(t.id, sub);
           deQueueSub(t.id);
+
+          if (sub.data.length > 10 && !sub.paused) {
+            sub.paused = true;
+
+            send({ id: t.id, type: "subscription.pause" });
+          }
         }
         break;
       }
