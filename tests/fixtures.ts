@@ -54,6 +54,7 @@ export const simpleRouter = router(
     countUp: subscription(async function* (ctx: TestContext) {
       for (let i = 0; i < 3; i++) {
         yield { count: i, userId: ctx.userId };
+        await new Promise((res) => setTimeout(res, 50));
       }
     }),
 
@@ -158,12 +159,16 @@ export interface TestPair {
   cleanup: () => Promise<void>;
 }
 
-export interface WorkerTestPair extends TestPair {
+export interface WorkerTestPair {
   worker: Worker;
+  client: ReturnType<typeof getClient>;
+  cleanup: () => Promise<void>;
 }
 
-export interface ChildProcessTestPair extends TestPair {
+export interface ChildProcessTestPair {
   child: ReturnType<typeof fork>;
+  client: ReturnType<typeof getClient>;
+  cleanup: () => Promise<void>;
 }
 
 // ============================================================================
@@ -210,45 +215,28 @@ export function createLocalTestPair(router: any): TestPair {
 // ============================================================================
 
 export async function createWorkerTestPair(
-  _routerDef?: any
+  _routerDef?: any,
 ): Promise<WorkerTestPair> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(
-      new URL("./worker-child.ts", import.meta.url),
-      {
-        execArgv: ["--experimental-strip-types"],
-      }
-    );
+    const worker = new Worker(new URL("./worker-child.ts", import.meta.url), {
+      execArgv: ["--experimental-strip-types"],
+    });
 
     let clientReady = false;
 
-    const server = new NRPCServer(simpleRouter);
     const client = getClient(
       (msg) => {
         worker.postMessage(msg);
       },
-      () => {}
-    );
-
-    const connection = server.getConnection(
-      { kind: "worker" },
-      (msg) => {
-        if (clientReady) {
-          client.onMsg(msg);
-        }
-      },
-      () => {}
+      () => {},
     );
 
     worker.on("message", (msg: any) => {
       if (msg.type === "ready") {
         clientReady = true;
         resolve({
-          server,
           client,
           worker,
-          send: (msg) => connection.onMsg(msg),
-          receive: (msg) => connection.onMsg(msg as any),
           cleanup: async () => {
             await new Promise<void>((res) => {
               worker.once("exit", () => res());
@@ -257,7 +245,7 @@ export async function createWorkerTestPair(
           },
         });
       } else {
-        connection.onMsg(msg);
+        client.onMsg(msg);
       }
     });
 
@@ -279,7 +267,7 @@ export async function createChildProcessTestPair(
 ): Promise<ChildProcessTestPair> {
   return new Promise((resolve, reject) => {
     const child = fork(
-      new URL("./child-process-child.mjs", import.meta.url).pathname,
+      new URL("./child-process-child.mjs", import.meta.url),
       [],
       {
         stdio: ["pipe", "pipe", "pipe", "ipc"],
@@ -289,20 +277,9 @@ export async function createChildProcessTestPair(
 
     let clientReady = false;
 
-    const server = new NRPCServer(simpleRouter);
     const client = getClient(
       (msg) => {
         child.send(msg);
-      },
-      () => {},
-    );
-
-    const connection = server.getConnection(
-      { kind: "child" },
-      (msg) => {
-        if (clientReady) {
-          client.onMsg(msg);
-        }
       },
       () => {},
     );
@@ -311,11 +288,8 @@ export async function createChildProcessTestPair(
       if (msg?.type === "ready") {
         clientReady = true;
         resolve({
-          server,
           client,
           child,
-          send: (msg) => connection.onMsg(msg),
-          receive: (msg) => connection.onMsg(msg as any),
           cleanup: async () => {
             return new Promise<void>((res) => {
               child.once("exit", () => res());
@@ -324,7 +298,7 @@ export async function createChildProcessTestPair(
           },
         });
       } else {
-        connection.onMsg(msg);
+        client.onMsg(msg);
       }
     });
 
@@ -337,8 +311,8 @@ export async function createChildProcessTestPair(
 
     setTimeout(() => {
       if (!clientReady) {
-        child.kill();
         reject(new Error("Child process initialization timeout"));
+        child.kill();
       }
     }, 5000);
   });
