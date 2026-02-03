@@ -36,7 +36,7 @@ export const simpleRouter = router(
       return `Hello ${ctx.userId}!`;
     }),
 
-    addNumbers: query(numberValidator, (ctx: TestContext, num: number) => {
+    addNumbers: query(z.number(), (ctx: TestContext, num: number) => {
       return num + 10;
     }),
 
@@ -47,7 +47,7 @@ export const simpleRouter = router(
       };
     }),
 
-    echoString: query(stringValidator, (ctx: TestContext, str: string) => {
+    echoString: query(z.string(), (ctx: TestContext, str: string) => {
       return str.toUpperCase();
     }),
 
@@ -59,7 +59,7 @@ export const simpleRouter = router(
     }),
 
     delayedValue: subscription(
-      numberValidator,
+      z.number(),
       async function* (ctx: TestContext, num: number) {
         for (let i = 0; i < 2; i++) {
           yield num * (i + 1);

@@ -1,9 +1,11 @@
 export type RouteToProp<T extends Route<C>, C = any> =
-  T extends Query<C, infer V, infer O> ? (inp: V) => Promise<O>
-  : T extends Subscription<C, infer V, infer O> ?
-    (inp: V) => Promise<AsyncIterable<O>>
-  : T extends Router<infer CIn, infer COut> ? RoutesToProxy<T["routes"], COut>
-  : never;
+  T extends Query<C, infer V, infer O>
+    ? (inp: V) => Promise<O>
+    : T extends Subscription<C, infer V, infer O>
+      ? (inp: V) => Promise<AsyncIterable<O>>
+      : T extends Router<infer CIn, infer COut>
+        ? RoutesToProxy<T["routes"], COut>
+        : never;
 
 export type RouterToProxy<R extends Router> =
   R extends Router<any> ? RoutesToProxy<R["routes"]> : never;
@@ -41,7 +43,9 @@ export interface Router<CIn = any, COut = any, R extends Routes<COut> = any> {
 export type NRPCRequest =
   | { id: string; type: "request"; path: string[]; input: unknown }
   | { id: string; type: "subscription.end" }
-  | { id: string; type: "subscription.error"; error: any };
+  | { id: string; type: "subscription.error"; error: any }
+  | { id: string; type: "subscription.pause" }
+  | { id: string; type: "subscription.resume" };
 
 // Server -> Client
 export type NRPCResponse =
