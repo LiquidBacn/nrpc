@@ -36,12 +36,9 @@ export const simpleRouter = router(
       return `Hello ${ctx.userId}!`;
     }),
 
-    addNumbers: query(
-      numberValidator,
-      (ctx: TestContext, num: number) => {
-        return num + 10;
-      }
-    ),
+    addNumbers: query(numberValidator, (ctx: TestContext, num: number) => {
+      return num + 10;
+    }),
 
     getUserInfo: query((ctx: TestContext) => {
       return {
@@ -50,12 +47,9 @@ export const simpleRouter = router(
       };
     }),
 
-    echoString: query(
-      stringValidator,
-      (ctx: TestContext, str: string) => {
-        return str.toUpperCase();
-      }
-    ),
+    echoString: query(stringValidator, (ctx: TestContext, str: string) => {
+      return str.toUpperCase();
+    }),
 
     countUp: subscription(async function* (ctx: TestContext) {
       for (let i = 0; i < 3; i++) {
@@ -69,9 +63,9 @@ export const simpleRouter = router(
         for (let i = 0; i < 2; i++) {
           yield num * (i + 1);
         }
-      }
+      },
     ),
-  }
+  },
 );
 
 // ============================================================================
@@ -104,9 +98,9 @@ export const nestedRouter = router(
             yield { adminId: ctx.userId, iteration: i };
           }
         }),
-      }
+      },
     ),
-  }
+  },
 );
 
 // ============================================================================
@@ -121,7 +115,10 @@ export const deepNestedRouter = router(
   }),
   {
     level1: router(
-      (ctx: TestContext): TestContext => ({ ...ctx, userId: `${ctx.userId}-L1` }),
+      (ctx: TestContext): TestContext => ({
+        ...ctx,
+        userId: `${ctx.userId}-L1`,
+      }),
       {
         value: query((ctx: TestContext) => {
           return `Level1: ${ctx.userId}`;
@@ -142,11 +139,11 @@ export const deepNestedRouter = router(
                 yield { depth: 2, userId: ctx.userId, index: i };
               }
             }),
-          }
+          },
         ),
-      }
+      },
     ),
-  }
+  },
 );
 
 // ============================================================================
@@ -181,17 +178,17 @@ export function createLocalTestPair(router: any): TestPair {
 
   const client = getClient(
     (msg) => {
-      serverSend(msg);
+      clientSend(msg);
     },
-    () => {}
+    () => {},
   );
 
   const connection = server.getConnection(
     { kind: "test" },
     (msg) => {
-      clientSend(msg);
+      serverSend(msg);
     },
-    () => {}
+    () => {},
   );
 
   clientSend = (msg) => connection.onMsg(msg);
@@ -213,7 +210,7 @@ export function createLocalTestPair(router: any): TestPair {
 // ============================================================================
 
 export async function createWorkerTestPair(
-  routerDef: any
+  _routerDef?: any
 ): Promise<WorkerTestPair> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(
@@ -224,10 +221,8 @@ export async function createWorkerTestPair(
     );
 
     let clientReady = false;
-    let clientSend: (msg: NRPCRequest) => void = () => {};
-    let serverSend: (msg: any) => void = () => {};
 
-    const server = new NRPCServer(routerDef);
+    const server = new NRPCServer(simpleRouter);
     const client = getClient(
       (msg) => {
         worker.postMessage(msg);
@@ -238,23 +233,21 @@ export async function createWorkerTestPair(
     const connection = server.getConnection(
       { kind: "worker" },
       (msg) => {
-        clientSend(msg);
+        if (clientReady) {
+          client.onMsg(msg);
+        }
       },
       () => {}
     );
 
-    clientSend = (msg) => connection.onMsg(msg);
-    serverSend = (msg: any) => client.onMsg(msg);
-
     worker.on("message", (msg: any) => {
       if (msg.type === "ready") {
         clientReady = true;
-        worker.postMessage({ type: "router", router: routerDef });
         resolve({
           server,
           client,
           worker,
-          send: clientSend,
+          send: (msg) => connection.onMsg(msg),
           receive: (msg) => connection.onMsg(msg as any),
           cleanup: async () => {
             await new Promise<void>((res) => {
@@ -264,7 +257,7 @@ export async function createWorkerTestPair(
           },
         });
       } else {
-        serverSend(msg);
+        connection.onMsg(msg);
       }
     });
 
@@ -282,7 +275,7 @@ export async function createWorkerTestPair(
 // ============================================================================
 
 export async function createChildProcessTestPair(
-  routerDef: any
+  _routerDef?: any,
 ): Promise<ChildProcessTestPair> {
   return new Promise((resolve, reject) => {
     const child = fork(
@@ -291,41 +284,37 @@ export async function createChildProcessTestPair(
       {
         stdio: ["pipe", "pipe", "pipe", "ipc"],
         serialization: "advanced",
-      }
+      },
     );
 
     let clientReady = false;
-    let clientSend: (msg: NRPCRequest) => void = () => {};
-    let serverSend: (msg: any) => void = () => {};
 
-    const server = new NRPCServer(routerDef);
+    const server = new NRPCServer(simpleRouter);
     const client = getClient(
       (msg) => {
         child.send(msg);
       },
-      () => {}
+      () => {},
     );
 
     const connection = server.getConnection(
       { kind: "child" },
       (msg) => {
-        clientSend(msg);
+        if (clientReady) {
+          client.onMsg(msg);
+        }
       },
-      () => {}
+      () => {},
     );
-
-    clientSend = (msg) => connection.onMsg(msg);
-    serverSend = (msg: any) => client.onMsg(msg);
 
     child.on("message", (msg: any) => {
       if (msg?.type === "ready") {
         clientReady = true;
-        child.send({ type: "router", router: routerDef });
         resolve({
           server,
           client,
           child,
-          send: clientSend,
+          send: (msg) => connection.onMsg(msg),
           receive: (msg) => connection.onMsg(msg as any),
           cleanup: async () => {
             return new Promise<void>((res) => {
@@ -335,7 +324,7 @@ export async function createChildProcessTestPair(
           },
         });
       } else {
-        serverSend(msg);
+        connection.onMsg(msg);
       }
     });
 

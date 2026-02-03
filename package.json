@@ -24,7 +24,7 @@
   },
   "scripts": {
     "build": "vite build && tsc",
-    "test": "vitest"
+    "test": "vitest run --reporter=json --outputFile=./test-results.json"
   },
   "devDependencies": {
     "@types/node": "^25.2.0",
