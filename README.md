@@ -43,13 +43,9 @@ const myRouter = router(
 
     backPressure: subscription(async function* () {
       for (let i = 0; i < 100; i++) {
-        // yield will return a promise when the client
-        // is applying back pressure.
-        // by `await`ing the yield, we automatically
-        // wait for the client to relieve back pressure.
-        // Note: when the client is not applying back
-        // pressure, yield will return `undefined`.
-        await (yield i);
+        // back pressure is handled automatically by the server
+        // at every `yield`.
+        yield i;
         await new Promise((res) => setTimeout(res, 100));
       }
     }),
