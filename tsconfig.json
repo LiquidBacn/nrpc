@@ -11,8 +11,7 @@
     "emitDeclarationOnly": true,
     "declaration": true,
     "outDir": "./dist",
+    "types": ["vite/client"]
   },
-  "exclude": [
-    "node_modules"
-  ]
+  "exclude": ["node_modules"]
 }

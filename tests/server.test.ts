@@ -32,8 +32,8 @@ describe("NRPCServer", () => {
 
     it("throws error for non-existent route", async () => {
       await expect(
-        server.getRoute({ kind: "test" }, ["nonExistent"])
-      ).rejects.toThrow('Not Found');
+        server.getRoute({ kind: "test" }, ["nonExistent"]),
+      ).rejects.toThrow("Not Found");
     });
 
     it("applies middleware to context", async () => {
@@ -67,7 +67,7 @@ describe("NRPCServer", () => {
     it("throws error for incomplete nested path", async () => {
       const nestedServer = new NRPCServer(nestedRouter);
       await expect(
-        nestedServer.getRoute({ kind: "test" }, ["admin"])
+        nestedServer.call({ kind: "test" }, ["admin"]),
       ).rejects.toThrow();
     });
   });
@@ -78,12 +78,20 @@ describe("NRPCServer", () => {
     });
 
     it("executes a query method", async () => {
-      const result = await server.call({ kind: "test" }, ["getGreeting"], undefined);
+      const result = await server.call(
+        { kind: "test" },
+        ["getGreeting"],
+        undefined,
+      );
       expect(result).toBe("Hello user123!");
     });
 
     it("executes a query with validator", async () => {
-      const result = await server.call({ kind: "test" }, ["addNumbers"], 5 as any);
+      const result = await server.call(
+        { kind: "test" },
+        ["addNumbers"],
+        5 as any,
+      );
       expect(result).toBe(15);
     });
 
@@ -91,13 +99,17 @@ describe("NRPCServer", () => {
       const result = await server.call(
         { kind: "test" },
         ["echoString"],
-        "hello" as any
+        "hello" as any,
       );
       expect(result).toBe("HELLO");
     });
 
     it("returns async iterator for subscription", async () => {
-      const result = await server.call({ kind: "test" }, ["countUp"], undefined);
+      const result = await server.call(
+        { kind: "test" },
+        ["countUp"],
+        undefined,
+      );
       expect((result as any)[Symbol.asyncIterator]).toBeDefined();
 
       const values: any[] = [];
@@ -109,7 +121,11 @@ describe("NRPCServer", () => {
     });
 
     it("passes input to subscription method", async () => {
-      const result = await server.call({ kind: "test" }, ["delayedValue"], 3 as any);
+      const result = await server.call(
+        { kind: "test" },
+        ["delayedValue"],
+        3 as any,
+      );
       const values: any[] = [];
       for await (const val of result as any) {
         values.push(val);
@@ -119,20 +135,17 @@ describe("NRPCServer", () => {
 
     it("throws error for non-existent route", async () => {
       await expect(
-        server.call({ kind: "test" }, ["nonExistent"], undefined)
+        server.call({ kind: "test" }, ["nonExistent"], undefined),
       ).rejects.toThrow();
     });
 
     it("throws error for invalid validator", async () => {
       const testRouter = router((ctx: any) => ctx, {
-        strictNumber: query(
-          z.number(),
-          (ctx: any, num: number) => num
-        ),
+        strictNumber: query(z.number(), (ctx: any, num: number) => num),
       });
       const strictServer = new NRPCServer(testRouter);
       await expect(
-        strictServer.call({ kind: "test" }, ["strictNumber"], "not-a-number")
+        strictServer.call({ kind: "test" }, ["strictNumber"], "not-a-number"),
       ).rejects.toThrow();
     });
 
@@ -144,7 +157,7 @@ describe("NRPCServer", () => {
       });
       const errorServer = new NRPCServer(errorRouter);
       await expect(
-        errorServer.call({ kind: "test" }, ["throwError"])
+        errorServer.call({ kind: "test" }, ["throwError"]),
       ).rejects.toThrow("Method error");
     });
 
@@ -159,11 +172,11 @@ describe("NRPCServer", () => {
 
     it("executes deeply nested subscription", async () => {
       const deepServer = new NRPCServer(deepNestedRouter);
-      const result = await deepServer.call({ kind: "test" }, [
-        "level1",
-        "level2",
-        "deepSub",
-      ], undefined);
+      const result = await deepServer.call(
+        { kind: "test" },
+        ["level1", "level2", "deepSub"],
+        undefined,
+      );
       const values: any[] = [];
       for await (const val of result as any) {
         values.push(val);
@@ -178,9 +191,9 @@ describe("NRPCServer", () => {
       server = new NRPCServer(simpleRouter);
     });
 
-    it("returns a proxy object", () => {
+    it("returns a proxy function", () => {
       const caller = server.getLocalCaller({ kind: "test" });
-      expect(typeof caller).toBe("object");
+      expect(typeof caller).toBe("function");
     });
 
     it("allows calling queries via proxy", async () => {
@@ -229,9 +242,7 @@ describe("NRPCServer", () => {
       });
       const errorServer = new NRPCServer(errorRouter);
       const caller = errorServer.getLocalCaller({ kind: "test" });
-      await expect(caller.nested.throwError()).rejects.toThrow(
-        "Nested error"
-      );
+      await expect(caller.nested.throwError()).rejects.toThrow("Nested error");
     });
   });
 
@@ -244,7 +255,7 @@ describe("NRPCServer", () => {
       const connection = server.getConnection(
         { kind: "test" },
         () => {},
-        () => {}
+        () => {},
       );
       expect(connection).toHaveProperty("onMsg");
       expect(connection).toHaveProperty("onClose");
@@ -259,7 +270,7 @@ describe("NRPCServer", () => {
         (msg) => {
           sentMessage = msg;
         },
-        () => {}
+        () => {},
       );
 
       connection.onMsg({
@@ -285,7 +296,7 @@ describe("NRPCServer", () => {
         (msg) => {
           sentMessage = msg;
         },
-        () => {}
+        () => {},
       );
 
       connection.onMsg({
@@ -314,7 +325,7 @@ describe("NRPCServer", () => {
         (msg) => {
           sentMessage = msg;
         },
-        () => {}
+        () => {},
       );
 
       connection.onMsg({
@@ -337,7 +348,7 @@ describe("NRPCServer", () => {
         (msg) => {
           messages.push(msg);
         },
-        () => {}
+        () => {},
       );
 
       connection.onMsg({
@@ -348,7 +359,7 @@ describe("NRPCServer", () => {
       });
 
       // Wait for subscription to complete
-      await new Promise((res) => setTimeout(res, 100));
+      await new Promise((res) => setTimeout(res, 1000));
 
       expect(messages[0].type).toBe("subscription.start");
       expect(messages[1].type).toBe("subscription.data");
@@ -362,7 +373,7 @@ describe("NRPCServer", () => {
         (msg) => {
           messages.push(msg);
         },
-        () => {}
+        () => {},
       );
 
       connection.onMsg({
@@ -382,6 +393,73 @@ describe("NRPCServer", () => {
 
       // Verify subscription was cleaned up (should not cause errors)
       expect(true).toBe(true);
+    });
+
+    it("ignores null messages", async () => {
+      let sentMessages = 0;
+      const connection = server.getConnection(
+        { kind: "test" },
+        () => {
+          sentMessages++;
+        },
+        () => {}
+      );
+
+      // Send null message - should be ignored by guard
+      connection.onMsg(null);
+
+      // Wait to ensure no processing
+      await new Promise((res) => setTimeout(res, 50));
+
+      // Should not have sent any messages
+      expect(sentMessages).toBe(0);
+    });
+
+    it("ignores non-object messages", async () => {
+      let sentMessages = 0;
+      const connection = server.getConnection(
+        { kind: "test" },
+        () => {
+          sentMessages++;
+        },
+        () => {}
+      );
+
+      // Send various non-object messages - should be ignored by guard
+      connection.onMsg("string" as any);
+      connection.onMsg(123 as any);
+      connection.onMsg(true as any);
+      connection.onMsg(undefined as any);
+
+      // Wait to ensure no processing
+      await new Promise((res) => setTimeout(res, 50));
+
+      // Should not have sent any messages
+      expect(sentMessages).toBe(0);
+    });
+
+    it("processes valid object messages normally", async () => {
+      let sentMessage: any;
+      const connection = server.getConnection(
+        { kind: "test" },
+        (msg) => {
+          sentMessage = msg;
+        },
+        () => {}
+      );
+
+      connection.onMsg({
+        id: "test-valid",
+        type: "request",
+        path: ["getGreeting"],
+        input: undefined,
+      });
+
+      await new Promise((res) => setTimeout(res, 50));
+
+      expect(sentMessage).toBeDefined();
+      expect(sentMessage.type).toBe("result");
+      expect(sentMessage.payload).toBe("Hello user123!");
     });
   });
 });

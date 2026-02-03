@@ -6,7 +6,11 @@ import type {
 } from "../shared/types.ts";
 
 type Call = { res: (val: any) => void; rej: (err?: any) => void };
-type Sub = { data: any[]; calls: Call[] };
+type Sub = {
+  data: ({ k: "v"; val: any } | { k: "e"; err: any })[];
+  calls: Call[];
+  done: boolean;
+};
 
 export function getClient<R extends Router>(
   send: (msg: NRPCRequest) => void,
@@ -24,12 +28,23 @@ export function getClient<R extends Router>(
         let data = sub.data.shift();
         let call = sub.calls.shift();
 
-        call?.res({ value: data, done: false });
+        if (data.k === "v") {
+          call?.res({ value: data.val, done: false });
+        } else if (data.k === "e") {
+          call.rej(data.err);
+        }
+      } else if (sub.done && sub.calls.length && !sub.data.length) {
+        sub.calls.forEach((a) => a.res({ value: undefined, done: true }));
+        subs.delete(id);
       }
     }
   };
 
   const onMsg = (msg: any) => {
+    if (msg === null || typeof msg !== "object") {
+      return;
+    }
+
     let t = msg as NRPCResponse;
 
     switch (t.type) {
@@ -68,6 +83,7 @@ export function getClient<R extends Router>(
               id: t.id,
               type: "subscription.end",
             });
+            subs.delete(t.id);
             return { value: undefined, done: true };
           },
           throw: async (error) => {
@@ -76,20 +92,21 @@ export function getClient<R extends Router>(
               type: "subscription.error",
               error,
             });
+            subs.delete(t.id);
             return { value: undefined, done: true };
           },
-          [Symbol.asyncDispose]: async () => {
-            send({
-              id: t.id,
-              type: "subscription.end",
-            });
-          },
+          // [Symbol.asyncDispose]: async () => {
+          //   send({
+          //     id: t.id,
+          //     type: "subscription.end",
+          //   });
+          // },
           [Symbol.asyncIterator]() {
             return this;
           },
         };
 
-        subs.set(t.id, { calls: [], data: [] });
+        subs.set(t.id, { calls: [], data: [], done: false });
 
         let call = inFlight.get(t.id);
         if (call) {
@@ -100,7 +117,7 @@ export function getClient<R extends Router>(
       case "subscription.data": {
         let sub = subs.get(t.id);
         if (sub) {
-          sub.data.push(t.payload);
+          sub.data.push({ k: "v", val: t.payload });
           subs.set(t.id, sub);
           deQueueSub(t.id);
         }
@@ -109,16 +126,16 @@ export function getClient<R extends Router>(
       case "subscription.end": {
         let sub = subs.get(t.id);
         if (sub) {
-          subs.delete(t.id);
-          sub.calls.forEach((a) => a.res({ value: undefined, done: true }));
+          sub.done = true;
+          deQueueSub(t.id);
         }
         break;
       }
       case "subscription.error": {
         let sub = subs.get(t.id);
         if (sub) {
-          subs.delete(t.id);
-          sub.calls.forEach((a) => a.rej(t.error));
+          sub.data.push({ k: "e", err: t.error });
+          deQueueSub(t.id);
         }
         break;
       }

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  createChildProcessTestPair,
-  simpleRouter,
-  nestedRouter,
-} from "./fixtures.ts";
+import { createChildProcessTestPair } from "./fixtures.ts";
 
 describe("Child Process Communication", () => {
   describe("Basic query execution", () => {

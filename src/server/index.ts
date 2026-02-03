@@ -108,6 +108,10 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
     const activeSubs = new Set<string>();
 
     const onMsg = async (msg: any) => {
+      if (msg === null || typeof msg !== "object") {
+        return;
+      }
+
       let t = msg as NRPCRequest;
       try {
         if (t.type == "request") {
