@@ -158,13 +158,12 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
                     rt.return(undefined);
                     break;
                   }
-                  let item = await rt.next(
-                    sub.paused
-                      ? new Promise<void>((res) => {
-                          sub.cbs.push(res);
-                        })
-                      : undefined,
-                  );
+
+                  if (sub.paused) {
+                    await new Promise<void>((res) => sub.cbs.push(res));
+                  }
+
+                  let item = await rt.next();
                   if (item.done) {
                     break;
                   }
