@@ -5,17 +5,10 @@ import { createLocalTestPair } from "./fixtures.ts";
 describe("Backpressure", () => {
   describe("Client-side backpressure", () => {
     it("pauses server subscription when client queue exceeds 10 items", async () => {
-      const pressureEvents: string[] = [];
-
       const testRouter = router((ctx: any) => ctx, {
         fastStream: subscription(async function* (ctx) {
           for (let i = 0; i < 20; i++) {
-            const back = yield i;
-            if (back) {
-              pressureEvents.push(`paused-at-${i}`);
-              await back;
-              pressureEvents.push(`resumed-at-${i}`);
-            }
+            yield i;
           }
         }),
       });
@@ -29,7 +22,7 @@ describe("Backpressure", () => {
         const results = [];
         for await (const item of gen) {
           results.push(item);
-          // Slow consumption to allow server to queue up
+          // Slow consumption to allow server to queue up and trigger backpressure
           if (results.length === 5) {
             // At this point, server should have queued more than 10
             break;
@@ -38,10 +31,6 @@ describe("Backpressure", () => {
 
         // Should have some items
         expect(results.length).toBeGreaterThan(0);
-
-        // Server should have experienced backpressure at some point
-        // (we can't directly observe this, but the test verifies the flow works)
-        expect(true).toBe(true);
       } finally {
         await pair.cleanup();
       }
@@ -54,7 +43,7 @@ describe("Backpressure", () => {
         controlledStream: subscription(async function* (ctx) {
           for (let i = 0; i < 30; i++) {
             yieldCount.value++;
-            await (yield i);
+            yield i;
           }
         }),
       });
@@ -85,8 +74,7 @@ describe("Backpressure", () => {
       const testRouter = router((ctx: any) => ctx, {
         rapidStream: subscription(async function* (ctx) {
           for (let i = 0; i < 50; i++) {
-            await (yield { id: i, data: `item-${i}` });
-            // No delay - rapid yields
+            yield { id: i, data: `item-${i}` };
           }
         }),
       });
@@ -115,7 +103,7 @@ describe("Backpressure", () => {
       const testRouter = router((ctx: any) => ctx, {
         slowConsumer: subscription(async function* (ctx) {
           for (let i = 0; i < 25; i++) {
-            await (yield i);
+            yield i;
           }
         }),
       });
@@ -144,30 +132,15 @@ describe("Backpressure", () => {
 
   describe("Backpressure queue thresholds", () => {
     it("triggers pause at threshold (queue > 10)", async () => {
-      const pauseMessages: string[] = [];
-
-      // Intercept send to capture pause messages
       const testRouter = router((ctx: any) => ctx, {
         thresholdTest: subscription(async function* (ctx) {
           for (let i = 0; i < 20; i++) {
-            await (yield i);
+            yield i;
           }
         }),
       });
 
       const pair = createLocalTestPair(testRouter);
-
-      // Wrap the send to capture pause/resume messages
-      const originalSend = pair.send;
-      (pair.send as any) = function (msg: any) {
-        if (msg.type === "subscription.pause") {
-          pauseMessages.push("pause");
-        }
-        if (msg.type === "subscription.resume") {
-          pauseMessages.push("resume");
-        }
-        return originalSend(msg);
-      };
 
       try {
         const gen = await (pair.client.proxy as any).thresholdTest();
@@ -198,7 +171,7 @@ describe("Backpressure", () => {
       const testRouter = router((ctx: any) => ctx, {
         drainTest: subscription(async function* (ctx) {
           for (let i = 0; i < 20; i++) {
-            await (yield i);
+            yield i;
           }
         }),
       });
@@ -229,7 +202,7 @@ describe("Backpressure", () => {
             if (i === 12) {
               throw new Error("Error under pressure");
             }
-            await (yield i);
+            yield i;
           }
         }),
       });
@@ -259,7 +232,7 @@ describe("Backpressure", () => {
       const testRouter = router((ctx: any) => ctx, {
         cancellableStream: subscription(async function* (ctx) {
           for (let i = 0; i < 50; i++) {
-            await (yield i);
+            yield i;
           }
         }),
       });
@@ -291,7 +264,7 @@ describe("Backpressure", () => {
         trackedStream: subscription(async function* (ctx) {
           try {
             for (let i = 0; i < 50; i++) {
-              await (yield i);
+              yield i;
             }
           } finally {
             generatorFinalized = true;
@@ -327,12 +300,12 @@ describe("Backpressure", () => {
       const testRouter = router((ctx: any) => ctx, {
         sub1: subscription(async function* (ctx) {
           for (let i = 0; i < 20; i++) {
-            await (yield `sub1-${i}`);
+            yield `sub1-${i}`;
           }
         }),
         sub2: subscription(async function* (ctx) {
           for (let i = 0; i < 20; i++) {
-            await (yield `sub2-${i}`);
+            yield `sub2-${i}`;
           }
         }),
       });

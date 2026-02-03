@@ -5,12 +5,14 @@ import type {
   RouterToProxy,
 } from "../shared/types.ts";
 
-type Call = { res: (val: any) => void; rej: (err?: any) => void };
+type Call = { res: (val: any) => void; rej: (err?: any) => void; back: number };
 type Sub = {
   data: ({ k: "v"; val: any } | { k: "e"; err: any })[];
   calls: Call[];
   done: boolean;
   paused: boolean;
+  back: number;
+  resume: number;
 };
 
 export function getClient<R extends Router>(
@@ -35,7 +37,7 @@ export function getClient<R extends Router>(
           call.rej(data.err);
         }
 
-        if (sub.data.length < 5 && sub.paused) {
+        if (sub.data.length < sub.resume && sub.paused) {
           sub.paused = false;
 
           send({ id, type: "subscription.resume" });
@@ -77,7 +79,7 @@ export function getClient<R extends Router>(
             return new Promise((res, rej) => {
               let sub = subs.get(t.id);
               if (sub) {
-                sub.calls.push({ res, rej });
+                sub.calls.push({ res, rej, back: 0 });
                 subs.set(t.id, sub);
                 deQueueSub(t.id);
               } else {
@@ -113,10 +115,17 @@ export function getClient<R extends Router>(
           },
         };
 
-        subs.set(t.id, { calls: [], data: [], done: false, paused: false });
-
         let call = inFlight.get(t.id);
         if (call) {
+          let resume = Math.max(1, Math.ceil(call.back / 2));
+          subs.set(t.id, {
+            calls: [],
+            data: [],
+            done: false,
+            paused: false,
+            back: call.back,
+            resume,
+          });
           inFlight.delete(t.id);
           call.res(gen);
         }
@@ -127,7 +136,7 @@ export function getClient<R extends Router>(
           sub.data.push({ k: "v", val: t.payload });
           deQueueSub(t.id);
 
-          if (sub.data.length > 10 && !sub.paused) {
+          if (sub.data.length > sub.back && !sub.paused) {
             sub.paused = true;
 
             send({ id: t.id, type: "subscription.pause" });
@@ -165,9 +174,13 @@ export function getClient<R extends Router>(
         }
       },
       apply: (a, b, args) => {
+        let back = 10;
+        if (typeof args[1] === "number" && args[1] > 0) {
+          back = args[1];
+        }
         let id = `nrpc_${nextId++}`;
         return new Promise((res, rej) => {
-          inFlight.set(id, { res, rej });
+          inFlight.set(id, { res, rej, back });
 
           send({
             id,

@@ -18,7 +18,7 @@ Primarily for WebWorkers, SharedWorkers, Node Workers, Child Processes, Electron
 ### Server
 
 ```typescript
-import { router, query } from "nrpc/shared";
+import { router, query, subscription } from "nrpc/shared";
 import { NRPCServer } from "nrpc/server";
 import { parentPort } from "node:worker_threads";
 
@@ -39,6 +39,19 @@ const myRouter = router(
     whoAmI: query((ctx) => {
       // When no input is needed, the validator can be skipped.
       return ctx.user.name;
+    }),
+
+    backPressure: subscription(async function* () {
+      for (let i = 0; i < 100; i++) {
+        // yield will return a promise when the client
+        // is applying back pressure.
+        // by `await`ing the yield, we automatically
+        // wait for the client to relieve back pressure.
+        // Note: when the client is not applying back
+        // pressure, yield will return `undefined`.
+        await (yield i);
+        await new Promise((res) => setTimeout(res, 100));
+      }
     }),
   },
 );

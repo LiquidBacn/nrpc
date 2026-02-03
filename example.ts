@@ -38,12 +38,17 @@ let r = router(
 
     subLargeQty: subscription(async function* () {
       for (let i = 0; i < 100; i++) {
-        let back = yield i;
-        if (back) {
-          console.log("[Child] Back pressure!");
-          await back;
-          console.log("[Child] Resuming!");
+        let t0 = performance.now();
+        yield i;
+        let te = performance.now();
+
+        let delta = te - t0;
+        if (delta > 11) {
+          console.log(
+            `[router] delay from backpressure of ${delta.toFixed(1)}ms.`,
+          );
         }
+
         await new Promise((res) => setTimeout(res, 10));
       }
     }),

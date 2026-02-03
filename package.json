@@ -32,5 +32,8 @@
     "vite": "^7.3.1",
     "vitest": "^4.0.18",
     "zod": "^4.3.6"
+  },
+  "prettier": {
+    "experimentalTernaries": true
   }
 }
