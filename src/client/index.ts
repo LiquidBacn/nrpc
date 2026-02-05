@@ -1,3 +1,4 @@
+import { NRPCConnClosed } from "../shared/index.ts";
 import type {
   NRPCRequest,
   NRPCResponse,
@@ -13,12 +14,14 @@ type Sub = {
   paused: boolean;
   back: number;
   resume: number;
+  gen: AsyncGenerator;
 };
 
 export function getClient<R extends Router>(
   send: (msg: NRPCRequest) => void,
   close: () => void,
 ) {
+  let closed = false;
   let nextId = 0;
 
   let inFlight = new Map<string, Call>();
@@ -43,13 +46,18 @@ export function getClient<R extends Router>(
           send({ id, type: "subscription.resume" });
         }
       } else if (sub.done && sub.calls.length && !sub.data.length) {
-        sub.calls.forEach((a) => a.res({ value: undefined, done: true }));
+        if (closed) {
+          sub.calls.forEach((a) => a.rej(new NRPCConnClosed()));
+        } else {
+          sub.calls.forEach((a) => a.res({ value: undefined, done: true }));
+        }
         subs.delete(id);
       }
     }
   };
 
   const onMsg = (msg: any) => {
+    if (closed) return;
     if (msg === null || typeof msg !== "object") {
       return;
     }
@@ -125,6 +133,7 @@ export function getClient<R extends Router>(
             paused: false,
             back: call.back,
             resume,
+            gen,
           });
           inFlight.delete(t.id);
           call.res(gen);
@@ -162,7 +171,19 @@ export function getClient<R extends Router>(
       }
     }
   };
-  const onClose = () => {};
+  const onClose = () => {
+    if (closed) return;
+    closed = true;
+    for (let [id, call] of inFlight) {
+      call.rej(new NRPCConnClosed());
+    }
+    inFlight.clear();
+
+    for (let [id, sub] of subs) {
+      sub.done = true;
+      deQueueSub(id);
+    }
+  };
 
   const getProxy = (path: string[]) => {
     return new Proxy(() => {}, {
@@ -174,6 +195,10 @@ export function getClient<R extends Router>(
         }
       },
       apply: (a, b, args) => {
+        if (closed) {
+          return Promise.reject(new NRPCConnClosed());
+        }
+
         let back = 10;
         if (typeof args[1] === "number" && args[1] > 0) {
           back = args[1];

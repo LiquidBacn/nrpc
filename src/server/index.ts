@@ -1,3 +1,4 @@
+import { NRPCConnClosed, NRPCSubEnded } from "../shared/index.ts";
 import type {
   Routes,
   Router,
@@ -102,15 +103,40 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
 
   getConnection(
     ctx: CIn,
-    send: (msg: NRPCResponse) => void,
+    /**
+     * send a Message to the client via user provided means.
+     * user can return a bool that when true it applies back pressure.
+     */
+    sendMsg: (msg: NRPCResponse) => Promise<boolean> | boolean,
     close: () => void,
   ) {
+    let paused = false;
+    const send = async (msg: NRPCResponse) => {
+      if (paused) {
+        await new Promise<void>((res, rej) => {
+          toDrain.push({ res, rej });
+        });
+      }
+
+      let bp = await sendMsg(msg);
+      if (bp) {
+        paused = true;
+      }
+    };
+
+    let toDrain: { res: () => void; rej: (error: any) => void }[] = [];
+
+    let closed = false;
     const activeSubs = new Map<
       string,
-      { paused: boolean; cbs: (() => void)[] }
+      {
+        paused: boolean;
+        resume: { res: () => void; rej: (err: any) => void }[];
+      }
     >();
 
     const onMsg = async (msg: any) => {
+      if (closed) return;
       if (msg === null || typeof msg !== "object") {
         return;
       }
@@ -131,7 +157,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
 
               let rt = await route.method(c, v);
 
-              send({
+              await send({
                 id: t.id,
                 type: "result",
                 payload: rt,
@@ -148,19 +174,24 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
               }
               let rt = await route.method(c, v);
 
-              activeSubs.set(t.id, { paused: false, cbs: [] });
-              send({ id: t.id, type: "subscription.start" });
+              activeSubs.set(t.id, { paused: false, resume: [] });
+              await send({ id: t.id, type: "subscription.start" });
 
               try {
                 while (1) {
                   let sub = activeSubs.get(t.id);
+                  if (closed) {
+                    throw new NRPCConnClosed();
+                  }
                   if (!sub) {
                     rt.return(undefined);
                     break;
                   }
 
                   if (sub.paused) {
-                    await new Promise<void>((res) => sub.cbs.push(res));
+                    await new Promise<void>((res, rej) =>
+                      sub.resume.push({ res, rej }),
+                    );
                   }
 
                   let item = await rt.next();
@@ -168,13 +199,18 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
                     break;
                   }
                   let payload = item.value;
-                  send({ id: t.id, type: "subscription.data", payload });
+                  await send({ id: t.id, type: "subscription.data", payload });
                 }
 
-                send({ id: t.id, type: "subscription.end" });
+                await send({ id: t.id, type: "subscription.end" });
               } catch (error) {
-                send({ id: t.id, type: "subscription.error", error });
+                if (error instanceof NRPCConnClosed) {
+                } else if (error instanceof NRPCSubEnded) {
+                } else {
+                  await send({ id: t.id, type: "subscription.error", error });
+                }
               } finally {
+                rt.return(undefined);
                 activeSubs.delete(t.id);
               }
 
@@ -184,7 +220,19 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
 
           throw new Error(`Path "${t.path.join(".")}" incomplete.`);
         } else if (t.type == "subscription.end") {
+          let sub = activeSubs.get(t.id);
+          activeSubs.delete(t.id);
+          if (sub) {
+            sub.resume.forEach((a) =>
+              a.rej(new NRPCSubEnded("NRPC Sub Ended")),
+            );
+          }
         } else if (t.type == "subscription.error") {
+          let sub = activeSubs.get(t.id);
+          activeSubs.delete(t.id);
+          if (sub) {
+            sub.resume.forEach((a) => a.rej(t.error));
+          }
         } else if (t.type == "subscription.pause") {
           let sub = activeSubs.get(t.id);
           if (sub) {
@@ -193,22 +241,49 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
         } else if (t.type == "subscription.resume") {
           let sub = activeSubs.get(t.id);
           if (sub) {
-            let cbs = sub.cbs;
-            sub.cbs = [];
+            let cbs = sub.resume;
+            sub.resume = [];
             sub.paused = false;
-            cbs.forEach((a) => a());
+            cbs.forEach((a) => a.res());
           }
         }
       } catch (error) {
-        send({
-          id: t.id,
-          type: "error",
-          error,
-        });
+        try {
+          await send({
+            id: t.id,
+            type: "error",
+            error,
+          });
+        } catch (error) {
+          if (error instanceof NRPCConnClosed) {
+          } else {
+            throw error;
+          }
+        }
       }
     };
-    const onClose = () => {};
+    const onClose = () => {
+      if (closed) return;
+      closed = true;
 
-    return { onMsg, onClose };
+      let arr = toDrain;
+      toDrain = [];
+      arr.forEach((a) => a.rej(new NRPCConnClosed()));
+
+      for (let [id, { paused, resume }] of activeSubs) {
+        resume.forEach((a) => a.rej(new NRPCConnClosed()));
+      }
+
+      activeSubs.clear();
+    };
+
+    const drain = () => {
+      paused = false;
+      let arr = toDrain;
+      toDrain = [];
+      arr.forEach((a) => a.res());
+    };
+
+    return { onMsg, onClose, drain, paused: () => paused };
   }
 }
