@@ -18,16 +18,33 @@ type Sub = {
 };
 
 export function getClient<R extends Router>(
-  send: (msg: NRPCRequest) => void,
+  sendMsg: (msg: NRPCRequest) => Promise<boolean | void> | boolean | void,
   close: () => void,
 ) {
+  let paused = false;
   let closed = false;
   let nextId = 0;
 
   let inFlight = new Map<string, Call>();
   let subs = new Map<string, Sub>();
+  let toDrain: { res: () => void; rej: (error: any) => void }[] = [];
 
-  const deQueueSub = (id: string) => {
+  const send = async (msg: NRPCRequest) => {
+    if (paused || toDrain.length) {
+      await new Promise<void>((res, rej) => {
+        toDrain.push({ res, rej });
+      });
+    }
+    let bp = await sendMsg(msg);
+    if (bp) {
+      paused = true;
+    } else if (toDrain.length) {
+      let item = toDrain.shift();
+      item.res();
+    }
+  };
+
+  const deQueueSub = async (id: string) => {
     let sub = subs.get(id);
     if (sub) {
       if (sub.calls.length && sub.data.length) {
@@ -43,7 +60,7 @@ export function getClient<R extends Router>(
         if (sub.data.length < sub.resume && sub.paused) {
           sub.paused = false;
 
-          send({ id, type: "subscription.resume" });
+          await send({ id, type: "subscription.resume" });
         }
       } else if (sub.done && sub.calls.length && !sub.data.length) {
         if (closed) {
@@ -56,7 +73,7 @@ export function getClient<R extends Router>(
     }
   };
 
-  const onMsg = (msg: any) => {
+  const onMsg = async (msg: any) => {
     if (closed) return;
     if (msg === null || typeof msg !== "object") {
       return;
@@ -95,16 +112,16 @@ export function getClient<R extends Router>(
               }
             });
           },
-          return: async () => {
-            send({
+          return: async (value) => {
+            await send({
               id: t.id,
               type: "subscription.end",
             });
             subs.delete(t.id);
-            return { value: undefined, done: true };
+            return { value, done: true };
           },
           throw: async (error) => {
-            send({
+            await send({
               id: t.id,
               type: "subscription.error",
               error,
@@ -148,7 +165,7 @@ export function getClient<R extends Router>(
           if (sub.data.length > sub.back && !sub.paused) {
             sub.paused = true;
 
-            send({ id: t.id, type: "subscription.pause" });
+            await send({ id: t.id, type: "subscription.pause" });
           }
         }
         break;
@@ -179,6 +196,10 @@ export function getClient<R extends Router>(
     }
     inFlight.clear();
 
+    let arr = toDrain;
+    toDrain = [];
+    arr.forEach((a) => a.rej(new NRPCConnClosed()));
+
     for (let [id, sub] of subs) {
       sub.done = true;
       deQueueSub(id);
@@ -204,10 +225,10 @@ export function getClient<R extends Router>(
           back = args[1];
         }
         let id = `nrpc_${nextId++}`;
-        return new Promise((res, rej) => {
+        return new Promise(async (res, rej) => {
           inFlight.set(id, { res, rej, back });
 
-          send({
+          await send({
             id,
             type: "request",
             path,
@@ -218,7 +239,16 @@ export function getClient<R extends Router>(
     });
   };
 
-  let proxy = getProxy([]) as any as RouterToProxy<R>;
+  const proxy = getProxy([]) as any as RouterToProxy<R>;
 
-  return { onMsg, onClose, proxy };
+  const drain = () => {
+    paused = false;
+
+    if (toDrain.length) {
+      let item = toDrain.shift();
+      item.res();
+    }
+  };
+
+  return { onMsg, onClose, proxy, drain, paused: () => paused };
 }

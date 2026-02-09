@@ -107,7 +107,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
      * send a Message to the client via user provided means.
      * user can return a bool that when true it applies back pressure.
      */
-    sendMsg: (msg: NRPCResponse) => Promise<boolean> | boolean,
+    sendMsg: (msg: NRPCResponse) => Promise<boolean | void> | boolean | void,
     close: () => void,
   ) {
     let paused = false;
@@ -117,10 +117,12 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
           toDrain.push({ res, rej });
         });
       }
-
       let bp = await sendMsg(msg);
       if (bp) {
         paused = true;
+      } else if (toDrain.length) {
+        let item = toDrain.shift();
+        item.res();
       }
     };
 
@@ -262,6 +264,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
         }
       }
     };
+
     const onClose = () => {
       if (closed) return;
       closed = true;
@@ -279,9 +282,11 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
 
     const drain = () => {
       paused = false;
-      let arr = toDrain;
-      toDrain = [];
-      arr.forEach((a) => a.res());
+
+      if (toDrain.length) {
+        let item = toDrain.shift();
+        item.res();
+      }
     };
 
     return { onMsg, onClose, drain, paused: () => paused };

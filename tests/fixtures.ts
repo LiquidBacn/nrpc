@@ -4,7 +4,12 @@ import { z } from "zod";
 import { router, query, subscription } from "../src/shared/index.ts";
 import { NRPCServer } from "../src/server/index.ts";
 import { getClient } from "../src/client/index.ts";
-import type { NRPCRequest, NRPCResponse } from "../src/shared/types.ts";
+import type {
+  NRPCRequest,
+  NRPCResponse,
+  Router,
+  Routes,
+} from "../src/shared/types.ts";
 
 // Test context type
 export interface TestContext {
@@ -151,9 +156,14 @@ export const deepNestedRouter = router(
 // TEST PAIR HELPERS
 // ============================================================================
 
-export interface TestPair {
-  server: NRPCServer<any, any, any>;
-  client: ReturnType<typeof getClient>;
+export interface TestPair<
+  R extends Router<CIn, COut, Rts>,
+  CIn = any,
+  COut = any,
+  Rts extends Routes = any,
+> {
+  server: NRPCServer<CIn, COut, Rts>;
+  client: ReturnType<typeof getClient<R>>;
   send: (msg: NRPCRequest) => void;
   receive: (msg: NRPCResponse) => void;
   cleanup: () => Promise<void>;
@@ -175,29 +185,61 @@ export interface ChildProcessTestPair {
 // LOCAL TEST PAIR (in-process)
 // ============================================================================
 
-export function createLocalTestPair(router: any): TestPair {
+export function createLocalTestPair<T extends Router>(
+  router: T,
+  serverDelay: number = 0,
+  clientDelay: number = 0,
+): TestPair<T> {
   const server = new NRPCServer(router);
 
-  let clientSend: (msg: NRPCRequest) => void = () => {};
-  let serverSend: (msg: NRPCResponse) => void = () => {};
+  let clientSend: (
+    msg: NRPCRequest,
+  ) => Promise<boolean | void> | boolean | void = () => {};
+  let serverSend: (
+    msg: NRPCResponse,
+  ) => Promise<boolean | void> | boolean | void = () => {};
 
-  const client = getClient(
-    (msg) => {
-      clientSend(msg);
+  const client = getClient<T>(
+    async (msg) => {
+      await clientSend(msg);
+      if (clientDelay > 0) {
+        setTimeout(() => {
+          if (client.paused()) {
+            client.drain();
+          }
+        }, clientDelay);
+        return true;
+      }
+      return false;
     },
     () => {},
   );
 
   const connection = server.getConnection(
     { kind: "test" },
-    (msg) => {
-      serverSend(msg);
+    async (msg) => {
+      await serverSend(msg);
+      if (serverDelay > 0) {
+        setTimeout(() => {
+          if (connection.paused()) {
+            connection.drain();
+          }
+        }, serverDelay);
+        return true;
+      }
+      return false;
     },
     () => {},
   );
 
-  clientSend = (msg) => connection.onMsg(msg);
-  serverSend = (msg: any) => client.onMsg(msg);
+  clientSend = async (msg) => {
+    await connection.onMsg(msg);
+    return false;
+  };
+  serverSend = async (msg: any) => {
+    await client.onMsg(msg);
+    return false;
+  };
 
   return {
     server,
@@ -214,9 +256,7 @@ export function createLocalTestPair(router: any): TestPair {
 // WORKER TEST PAIR
 // ============================================================================
 
-export async function createWorkerTestPair(
-  _routerDef?: any,
-): Promise<WorkerTestPair> {
+export async function createWorkerTestPair(): Promise<WorkerTestPair> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./worker-child.ts", import.meta.url), {
       execArgv: ["--experimental-strip-types"],
