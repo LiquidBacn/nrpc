@@ -16,7 +16,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).fastStream();
+        const gen = await pair.client.proxy.fastStream();
 
         // Read items one by one, slowly
         const results = [];
@@ -51,7 +51,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).controlledStream();
+        const gen = await pair.client.proxy.controlledStream();
         const results = [];
 
         // Consume all items
@@ -82,7 +82,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).rapidStream();
+        const gen = await pair.client.proxy.rapidStream();
         const results = [];
 
         for await (const item of gen) {
@@ -111,7 +111,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).slowConsumer();
+        const gen = await pair.client.proxy.slowConsumer();
         const results = [];
 
         // Consume slowly
@@ -143,7 +143,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).thresholdTest();
+        const gen = await pair.client.proxy.thresholdTest();
         const results = [];
 
         // Consume a few items then pause
@@ -179,7 +179,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).drainTest();
+        const gen = await pair.client.proxy.drainTest();
         const results = [];
 
         // Fast consumption to allow queue to drain
@@ -210,7 +210,7 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).errorUnderPressure();
+        const gen = await pair.client.proxy.errorUnderPressure();
         const results = [];
 
         try {
@@ -240,14 +240,14 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).cancellableStream();
+        const gen = await pair.client.proxy.cancellableStream();
 
         // Start consuming
         const result1 = await gen.next();
         expect(result1.done).toBe(false);
 
         // Cancel the subscription
-        await gen.return();
+        await gen.return(undefined);
 
         // Next call should return done
         const result2 = await gen.next();
@@ -275,14 +275,14 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen = await (pair.client.proxy as any).trackedStream();
+        const gen = await pair.client.proxy.trackedStream();
 
         // Read a few items
         await gen.next();
         await gen.next();
 
         // Cancel
-        await gen.return();
+        await gen.return(undefined);
 
         // Give it a moment to clean up
         await new Promise((res) => setTimeout(res, 50));
@@ -313,8 +313,8 @@ describe("Backpressure", () => {
       const pair = createLocalTestPair(testRouter);
 
       try {
-        const gen1 = await (pair.client.proxy as any).sub1();
-        const gen2 = await (pair.client.proxy as any).sub2();
+        const gen1 = await pair.client.proxy.sub1();
+        const gen2 = await pair.client.proxy.sub2();
 
         const results1 = [];
         const results2 = [];

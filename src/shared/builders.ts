@@ -30,7 +30,7 @@ export function query<C, V, O>(validator: any, method?: any): Query<C, any, O> {
     return {
       _tag: "q",
       validator: () => {},
-      method: (c, i, s) => validator(c, s),
+      method: (ctx, input, signal) => validator(ctx, signal),
     };
   }
   return {

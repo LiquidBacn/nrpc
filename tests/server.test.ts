@@ -67,7 +67,9 @@ describe("NRPCServer", () => {
     it("throws error for incomplete nested path", async () => {
       const nestedServer = new NRPCServer(nestedRouter);
       await expect(
-        nestedServer.call({ kind: "test" }, ["admin"]),
+        nestedServer.call(AbortSignal.timeout(5000), { kind: "test" }, [
+          "admin",
+        ]),
       ).rejects.toThrow();
     });
   });
@@ -79,6 +81,7 @@ describe("NRPCServer", () => {
 
     it("executes a query method", async () => {
       const result = await server.call(
+        AbortSignal.timeout(5000),
         { kind: "test" },
         ["getGreeting"],
         undefined,
@@ -88,6 +91,7 @@ describe("NRPCServer", () => {
 
     it("executes a query with validator", async () => {
       const result = await server.call(
+        AbortSignal.timeout(5000),
         { kind: "test" },
         ["addNumbers"],
         5 as any,
@@ -97,6 +101,7 @@ describe("NRPCServer", () => {
 
     it("executes a query with string validator", async () => {
       const result = await server.call(
+        AbortSignal.timeout(5000),
         { kind: "test" },
         ["echoString"],
         "hello" as any,
@@ -106,6 +111,7 @@ describe("NRPCServer", () => {
 
     it("returns async iterator for subscription", async () => {
       const result = await server.call(
+        AbortSignal.timeout(5000),
         { kind: "test" },
         ["countUp"],
         undefined,
@@ -122,6 +128,7 @@ describe("NRPCServer", () => {
 
     it("passes input to subscription method", async () => {
       const result = await server.call(
+        AbortSignal.timeout(5000),
         { kind: "test" },
         ["delayedValue"],
         3 as any,
@@ -135,7 +142,12 @@ describe("NRPCServer", () => {
 
     it("throws error for non-existent route", async () => {
       await expect(
-        server.call({ kind: "test" }, ["nonExistent"], undefined),
+        server.call(
+          AbortSignal.timeout(5000),
+          { kind: "test" },
+          ["nonExistent"],
+          undefined,
+        ),
       ).rejects.toThrow();
     });
 
@@ -145,7 +157,12 @@ describe("NRPCServer", () => {
       });
       const strictServer = new NRPCServer(testRouter);
       await expect(
-        strictServer.call({ kind: "test" }, ["strictNumber"], "not-a-number"),
+        strictServer.call(
+          AbortSignal.timeout(5000),
+          { kind: "test" },
+          ["strictNumber"],
+          "not-a-number",
+        ),
       ).rejects.toThrow();
     });
 
@@ -157,22 +174,26 @@ describe("NRPCServer", () => {
       });
       const errorServer = new NRPCServer(errorRouter);
       await expect(
-        errorServer.call({ kind: "test" }, ["throwError"]),
+        errorServer.call(AbortSignal.timeout(5000), { kind: "test" }, [
+          "throwError",
+        ]),
       ).rejects.toThrow("Method error");
     });
 
     it("executes nested query with middleware transformation", async () => {
       const nestedServer = new NRPCServer(nestedRouter);
-      const result = await nestedServer.call({ kind: "test" }, [
-        "admin",
-        "secretData",
-      ]);
+      const result = await nestedServer.call(
+        AbortSignal.timeout(5000),
+        { kind: "test" },
+        ["admin", "secretData"],
+      );
       expect(result).toEqual({ secret: "admin-only", userId: "user456" });
     });
 
     it("executes deeply nested subscription", async () => {
       const deepServer = new NRPCServer(deepNestedRouter);
       const result = await deepServer.call(
+        AbortSignal.timeout(5000),
         { kind: "test" },
         ["level1", "level2", "deepSub"],
         undefined,
@@ -402,7 +423,7 @@ describe("NRPCServer", () => {
         () => {
           sentMessages++;
         },
-        () => {}
+        () => {},
       );
 
       // Send null message - should be ignored by guard
@@ -422,7 +443,7 @@ describe("NRPCServer", () => {
         () => {
           sentMessages++;
         },
-        () => {}
+        () => {},
       );
 
       // Send various non-object messages - should be ignored by guard
@@ -445,7 +466,7 @@ describe("NRPCServer", () => {
         (msg) => {
           sentMessage = msg;
         },
-        () => {}
+        () => {},
       );
 
       connection.onMsg({

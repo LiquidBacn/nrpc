@@ -15,7 +15,6 @@ import type {
   Router,
   Routes,
 } from "../src/shared/types.ts";
-import { ExpectTypeOf } from "vitest";
 
 // Test context type
 export interface TestContext {
@@ -77,6 +76,14 @@ export const simpleRouter = router(
         }
       },
     ),
+
+    longQuery: query(async (ctx, signal) => {
+      await new Promise((res) => setTimeout(res, 1000)); // wait one second
+      if (signal.aborted) {
+        console.log("Request canceled");
+      }
+      return "One Second Later.";
+    }),
   },
 );
 
@@ -183,7 +190,7 @@ export interface WorkerTestPair {
 
 export interface ChildProcessTestPair {
   child: ReturnType<typeof fork>;
-  client: ReturnType<typeof getClient>;
+  client: ReturnType<typeof getClient<typeof simpleRouter>>;
   cleanup: () => Promise<void>;
 }
 
@@ -323,7 +330,7 @@ export async function createChildProcessTestPair(
 
     let clientReady = false;
 
-    const client = getClient(
+    const client = getClient<typeof simpleRouter>(
       (msg) => {
         child.send(msg);
       },
