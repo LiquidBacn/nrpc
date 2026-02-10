@@ -39,10 +39,16 @@ export class NRPCPromise<T> extends Promise<T> {
     };
   }
 
+  /**
+   * Unlike `.then`, does not return a new Promise, but rather `this`.
+   * @param message
+   */
   cancel(message?: string) {
-    if (this.#canceled) return;
-    this.#canceled = true;
-    this.#reject(message);
-    this.#cancel(message);
+    if (!this.#canceled) {
+      this.#canceled = true;
+      this.#reject(message);
+      this.#cancel(message);
+    }
+    return this;
   }
 }

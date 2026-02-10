@@ -170,11 +170,13 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
               let rt = await route.method(c, v, controller.signal);
               requests.delete(t.id);
 
-              await send({
-                id: t.id,
-                type: "result",
-                payload: rt,
-              });
+              if (!controller.signal.aborted) {
+                await send({
+                  id: t.id,
+                  type: "result",
+                  payload: rt,
+                });
+              }
 
               return;
             }
