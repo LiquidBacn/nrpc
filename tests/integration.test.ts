@@ -418,9 +418,9 @@ describe("Integration: Client ↔ Server", () => {
     it("queues multiple requests during client backpressure", async () => {
       const pair = createLocalTestPair(simpleRouter, 0, 50);
 
-      const p1 = await pair.client.proxy.addNumbers(1);
-      const p2 = await pair.client.proxy.addNumbers(2);
-      const p3 = await pair.client.proxy.addNumbers(3);
+      const p1 = pair.client.proxy.addNumbers(1);
+      const p2 = pair.client.proxy.addNumbers(2);
+      const p3 = pair.client.proxy.addNumbers(3);
 
       const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
       expect(r1).toBe(11);

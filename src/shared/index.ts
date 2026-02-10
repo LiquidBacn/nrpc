@@ -16,7 +16,7 @@ export class NRPCReqCanceled extends Error {
 }
 
 export class NRPCPromise<T> extends Promise<T> {
-  #cancel: () => void;
+  #cancel: (msg?: string) => void;
   #reject: (msg?: string) => void;
   #canceled = false;
 
@@ -25,7 +25,7 @@ export class NRPCPromise<T> extends Promise<T> {
       resolve: (value: T | Promise<T>) => void,
       reject: (reason: any) => void,
     ) => void,
-    cancel: () => void,
+    cancel: (message?: string) => void,
   ) {
     let reject: (reason: any) => void;
     super((res, rej) => {
@@ -43,6 +43,6 @@ export class NRPCPromise<T> extends Promise<T> {
     if (this.#canceled) return;
     this.#canceled = true;
     this.#reject(message);
-    this.#cancel();
+    this.#cancel(message);
   }
 }

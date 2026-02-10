@@ -25,7 +25,7 @@ export type Route<C = any> = Query<C> | Subscription<C> | Router<C>;
 export interface Query<C = any, V = any, O = any> {
   _tag: "q";
   validator: Validator<V>;
-  method: (ctx: C, inp: V) => O | Promise<O>;
+  method: (ctx: C, inp: V, cancel: AbortSignal) => O | Promise<O>;
 }
 
 export interface Subscription<C = any, V = any, O = any> {
@@ -40,8 +40,10 @@ export interface Router<CIn = any, COut = any, R extends Routes<COut> = any> {
   routes: R;
 }
 
+// Client -> Server
 export type NRPCRequest =
   | { id: string; type: "request"; path: string[]; input: unknown }
+  | { id: string; type: "request.cancel"; message?: string }
   | { id: string; type: "subscription.end" }
   | { id: string; type: "subscription.error"; error: any }
   | { id: string; type: "subscription.pause" }
