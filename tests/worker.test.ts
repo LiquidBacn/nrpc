@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { NRPCReqCanceled } from "../src/shared/index.ts";
 import { createWorkerTestPair } from "./fixtures.ts";
 
 describe("Worker Thread Communication", () => {
@@ -125,10 +126,43 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        await (pair.client.proxy as any).nonExistent();
+        //@ts-expect-error
+        await pair.client.proxy.nonExistent();
         expect.fail("Should have thrown");
       } catch (err: any) {
         expect(err).toBeDefined();
+      } finally {
+        await pair.cleanup();
+      }
+    });
+  });
+
+  describe("Cancellation", () => {
+    it("rejects canceled requests with NRPCReqCanceled", async () => {
+      const pair = await createWorkerTestPair();
+
+      try {
+        const request = pair.client.proxy.longQuery();
+        request.cancel("stop it");
+
+        await expect(request).rejects.toBeInstanceOf(NRPCReqCanceled);
+        await expect(request).rejects.toMatchObject({ message: "stop it" });
+      } finally {
+        await new Promise((res) => setTimeout(res, 1000)); // wait one second
+        await pair.cleanup();
+      }
+    });
+
+    it("returns itself and ignores repeat cancels", async () => {
+      const pair = await createWorkerTestPair();
+
+      try {
+        const request = pair.client.proxy.longQuery();
+        const same = request.cancel("first");
+        request.cancel("second");
+
+        expect(same).toBe(request);
+        await expect(request).rejects.toMatchObject({ message: "first" });
       } finally {
         await pair.cleanup();
       }

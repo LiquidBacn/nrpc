@@ -17,8 +17,8 @@ export type RoutesToProxy<T extends Routes<C>, C = any> = {
 };
 
 export type Validator<T = any> = CustomValidator<T> | ZodValidator<T>;
-type CustomValidator<T = any> = (inp: any) => T | Promise<T>;
-type ZodValidator<T = any> = { parse: (val: any) => T };
+export type CustomValidator<T = any> = (inp: any) => T | Promise<T>;
+export type ZodValidator<T = any> = { parse: (val: any) => T };
 
 export type Route<C = any> = Query<C> | Subscription<C> | Router<C>;
 

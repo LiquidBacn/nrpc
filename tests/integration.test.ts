@@ -195,7 +195,8 @@ describe("Integration: Client ↔ Server", () => {
       const pair = createLocalTestPair(simpleRouter);
 
       try {
-        await (pair.client.proxy as any).nonExistentRoute();
+        //@ts-expect-error
+        await pair.client.proxy.nonExistentRoute();
         expect.fail("Should have thrown");
       } catch (err: any) {
         expect(err.message).toContain("Not Found");
@@ -206,7 +207,8 @@ describe("Integration: Client ↔ Server", () => {
       const pair = createLocalTestPair(nestedRouter);
 
       try {
-        await (pair.client.proxy as any).nonExistent.route();
+        //@ts-expect-error
+        await pair.client.proxy.nonExistent.route();
         expect.fail("Should have thrown");
       } catch (err: any) {
         expect(err.message).toContain("Not Found");

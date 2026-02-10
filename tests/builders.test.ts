@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { router, query, subscription } from "../src/shared/index.ts";
 import { z } from "zod";
+import type { CustomValidator } from "../src/shared/types.ts";
 
 describe("Builders", () => {
   describe("router()", () => {
@@ -41,15 +42,20 @@ describe("Builders", () => {
     });
 
     it("stores method without validator", () => {
-      const method = () => "result";
+      const method = (_ctx: any, _signal: AbortSignal) => "result";
       const testQuery = query(method);
-      expect(testQuery.method).toBe(method);
+      const controller = new AbortController();
+      const result = testQuery.method({}, undefined, controller.signal);
+      expect(result).toBe("result");
       expect(testQuery.validator).toBeDefined();
     });
 
     it("creates default validator when none provided", () => {
       const testQuery = query(() => "result");
-      const validated = (testQuery.validator as any)(undefined);
+      expect(testQuery.validator).toBeTypeOf("function");
+      const validated = (testQuery.validator as CustomValidator<void>)(
+        undefined,
+      );
       expect(validated).toBeUndefined();
     });
 
@@ -61,10 +67,13 @@ describe("Builders", () => {
       expect(testQuery.method).toBe(method);
     });
 
-    it("supports async methods", () => {
-      const asyncMethod = async () => "result";
+    it("supports async methods", async () => {
+      const asyncMethod = async (_ctx: any, _signal: AbortSignal) => "result";
       const testQuery = query(asyncMethod);
-      expect(testQuery.method).toBe(asyncMethod);
+      const controller = new AbortController();
+      await expect(
+        testQuery.method({}, undefined, controller.signal),
+      ).resolves.toBe("result");
     });
 
     it("works with custom validator functions", () => {
@@ -95,7 +104,7 @@ describe("Builders", () => {
       const testSub = subscription(async function* () {
         yield "result";
       });
-      const validated = (testSub.validator as any)(undefined);
+      const validated = (testSub.validator as CustomValidator<void>)(undefined);
       expect(validated).toBeUndefined();
     });
 
@@ -133,7 +142,7 @@ describe("Builders", () => {
           for (let i = 0; i < inp; i++) {
             yield i;
           }
-        }
+        },
       );
       expect(testSub.validator).toBe(customValidator);
     });
