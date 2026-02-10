@@ -41,6 +41,18 @@ const myRouter = router(
       return ctx.user.name;
     }),
 
+    superLongRunningRequest: query((ctx, signal) => {
+      step1InTask();
+      // throwing an error is meaningless here, the client has already rejected
+      // it's request. So returning is actually the recommended option.
+      if (signal.aborted) return;
+
+      step2InTask();
+
+      // etc...
+      if (signal.aborted) return;
+    }),
+
     backPressure: subscription(async function* () {
       for (let i = 0; i < 100; i++) {
         // back pressure is handled automatically by the server
@@ -82,6 +94,14 @@ worker.on("message", (msg) => client.onMsg(msg));
 
 const result = await client.proxy.greet("World");
 console.log(result); // "Hello, World!"
+
+// the returned Object is an extension to a Promise that has a cancel method,
+// which will abort the signal on the server.
+const req = client.proxy.superLongRunningRequest();
+
+setTimeout(() => {
+  req.cancel();
+}, 5000);
 ```
 
 ## Disclaimer
