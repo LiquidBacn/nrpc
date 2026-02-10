@@ -1,4 +1,4 @@
-import { NRPCConnClosed } from "../shared/index.ts";
+import { NRPCConnClosed, NRPCPromise } from "../shared/index.ts";
 import type {
   NRPCRequest,
   NRPCResponse,
@@ -225,16 +225,21 @@ export function getClient<R extends Router>(
           back = args[1];
         }
         let id = `nrpc_${nextId++}`;
-        return new Promise(async (res, rej) => {
-          inFlight.set(id, { res, rej, back });
+        return new NRPCPromise(
+          async (res, rej) => {
+            inFlight.set(id, { res, rej, back });
 
-          await send({
-            id,
-            type: "request",
-            path,
-            input: args[0],
-          });
-        });
+            await send({
+              id,
+              type: "request",
+              path,
+              input: args[0],
+            });
+          },
+          () => {
+            inFlight.delete(id);
+          },
+        );
       },
     });
   };

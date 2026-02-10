@@ -1,7 +1,12 @@
 import { Worker } from "worker_threads";
 import { fork } from "child_process";
 import { z } from "zod";
-import { router, query, subscription } from "../src/shared/index.ts";
+import {
+  router,
+  query,
+  subscription,
+  NRPCReqCanceled,
+} from "../src/shared/index.ts";
 import { NRPCServer } from "../src/server/index.ts";
 import { getClient } from "../src/client/index.ts";
 import type {
@@ -10,6 +15,7 @@ import type {
   Router,
   Routes,
 } from "../src/shared/types.ts";
+import { ExpectTypeOf } from "vitest";
 
 // Test context type
 export interface TestContext {
@@ -171,7 +177,7 @@ export interface TestPair<
 
 export interface WorkerTestPair {
   worker: Worker;
-  client: ReturnType<typeof getClient>;
+  client: ReturnType<typeof getClient<typeof simpleRouter>>;
   cleanup: () => Promise<void>;
 }
 
@@ -264,7 +270,7 @@ export async function createWorkerTestPair(): Promise<WorkerTestPair> {
 
     let clientReady = false;
 
-    const client = getClient(
+    const client = getClient<typeof simpleRouter>(
       (msg) => {
         worker.postMessage(msg);
       },

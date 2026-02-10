@@ -7,7 +7,7 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        const result = await (pair.client.proxy as any).getGreeting();
+        const result = await pair.client.proxy.getGreeting();
         expect(result).toBe("Hello user123!");
       } finally {
         await pair.cleanup();
@@ -18,7 +18,7 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        const result = await (pair.client.proxy as any).addNumbers(10);
+        const result = await pair.client.proxy.addNumbers(10);
         expect(result).toBe(20);
       } finally {
         await pair.cleanup();
@@ -29,8 +29,8 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        const result1 = await (pair.client.proxy as any).getGreeting();
-        const result2 = await (pair.client.proxy as any).addNumbers(5);
+        const result1 = await pair.client.proxy.getGreeting();
+        const result2 = await pair.client.proxy.addNumbers(5);
 
         expect(result1).toBe("Hello user123!");
         expect(result2).toBe(15);
@@ -44,8 +44,8 @@ describe("Worker Thread Communication", () => {
 
       try {
         const [result1, result2] = await Promise.all([
-          (pair.client.proxy as any).getGreeting(),
-          (pair.client.proxy as any).addNumbers(3),
+          pair.client.proxy.getGreeting(),
+          pair.client.proxy.addNumbers(3),
         ]);
 
         expect(result1).toBe("Hello user123!");
@@ -61,7 +61,7 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        const gen = await (pair.client.proxy as any).countUp();
+        const gen = await pair.client.proxy.countUp();
         const results = [];
 
         for await (const item of gen) {
@@ -79,7 +79,7 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        const gen = await (pair.client.proxy as any).delayedValue(5);
+        const gen = await pair.client.proxy.delayedValue(5);
         const results = [];
 
         for await (const item of gen) {
@@ -97,8 +97,8 @@ describe("Worker Thread Communication", () => {
 
       try {
         const [gen1, gen2] = await Promise.all([
-          (pair.client.proxy as any).countUp(),
-          (pair.client.proxy as any).countUp(),
+          pair.client.proxy.countUp(),
+          pair.client.proxy.countUp(),
         ]);
 
         const results1 = [];
@@ -141,7 +141,7 @@ describe("Worker Thread Communication", () => {
 
       try {
         // Test that query results are properly serialized
-        const greeting = await (pair.client.proxy as any).getGreeting();
+        const greeting = await pair.client.proxy.getGreeting();
         expect(greeting).toBe("Hello user123!");
       } finally {
         await pair.cleanup();
@@ -152,7 +152,7 @@ describe("Worker Thread Communication", () => {
       const pair = await createWorkerTestPair();
 
       try {
-        const userInfo = await (pair.client.proxy as any).getUserInfo();
+        const userInfo = await pair.client.proxy.getUserInfo();
         expect(userInfo).toEqual({
           userId: "user123",
           isAdmin: false,

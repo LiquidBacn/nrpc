@@ -1,4 +1,4 @@
-import { NRPCConnClosed, NRPCSubEnded } from "../shared/index.ts";
+import { NRPCConnClosed, NRPCPromise, NRPCSubEnded } from "../shared/index.ts";
 import type {
   Routes,
   Router,
@@ -87,14 +87,17 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
           }
         },
         apply: (_, t, args) => {
-          return new Promise(async (res, rej) => {
-            try {
-              let rt = await this.call(ctx, path, args[0]);
-              res(rt);
-            } catch (e) {
-              rej(e);
-            }
-          });
+          return new NRPCPromise(
+            async (res, rej) => {
+              try {
+                let rt = await this.call(ctx, path, args[0]);
+                res(rt);
+              } catch (e) {
+                rej(e);
+              }
+            },
+            () => {},
+          );
         },
       });
     };
