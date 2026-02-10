@@ -19,18 +19,18 @@ export function router<CIn, COut, R extends Routes<COut>>(
 }
 
 export function query<C, O>(
-  method: (ctx: C) => O | Promise<O>,
+  method: (ctx: C, signal: AbortSignal) => O | Promise<O>,
 ): Query<C, void, O>;
 export function query<C, V, O>(
   validator: Validator<V>,
-  method: (ctx: C, inp: V) => O | Promise<O>,
+  method: (ctx: C, inp: V, signal: AbortSignal) => O | Promise<O>,
 ): Query<C, V, O>;
 export function query<C, V, O>(validator: any, method?: any): Query<C, any, O> {
-  if (method == undefined) {
+  if (method === undefined) {
     return {
       _tag: "q",
       validator: () => {},
-      method: validator,
+      method: (c, i, s) => validator(c, s),
     };
   }
   return {

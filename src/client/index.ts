@@ -236,8 +236,13 @@ export function getClient<R extends Router>(
               input: args[0],
             });
           },
-          () => {
+          (message) => {
             inFlight.delete(id);
+            send({
+              id,
+              type: "request.cancel",
+              message,
+            });
           },
         );
       },

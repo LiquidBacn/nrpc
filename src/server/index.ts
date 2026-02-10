@@ -49,7 +49,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
     return { route: pointer, c } as { route: Route; c: any };
   }
 
-  async call(ctx: CIn, path: string[], arg?: any) {
+  async call(signal: AbortSignal, ctx: CIn, path: string[], arg?: any) {
     let { route, c } = await this.getRoute(ctx, path);
 
     switch (route._tag) {
@@ -60,7 +60,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
         } else {
           v = route.validator.parse(arg);
         }
-        return route.method(c, v);
+        return route.method(c, v, signal);
       }
       case "s": {
         let v: any;
@@ -87,16 +87,19 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
           }
         },
         apply: (_, t, args) => {
+          const controller = new AbortController();
           return new NRPCPromise(
             async (res, rej) => {
               try {
-                let rt = await this.call(ctx, path, args[0]);
+                let rt = await this.call(controller.signal, ctx, path, args[0]);
                 res(rt);
               } catch (e) {
                 rej(e);
               }
             },
-            () => {},
+            () => {
+              controller.abort();
+            },
           );
         },
       });
@@ -113,6 +116,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
     sendMsg: (msg: NRPCResponse) => Promise<boolean | void> | boolean | void,
     close: () => void,
   ) {
+    let requests = new Map<string, AbortController>();
     let paused = false;
     const send = async (msg: NRPCResponse) => {
       if (paused) {
@@ -153,14 +157,18 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
 
           switch (route._tag) {
             case "q": {
-              let v;
+              let v: any;
               if (typeof route.validator === "function") {
                 v = route.validator(t.input);
               } else {
                 v = route.validator.parse(t.input);
               }
 
-              let rt = await route.method(c, v);
+              let controller = new AbortController();
+
+              requests.set(t.id, controller);
+              let rt = await route.method(c, v, controller.signal);
+              requests.delete(t.id);
 
               await send({
                 id: t.id,
@@ -171,7 +179,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
               return;
             }
             case "s": {
-              let v;
+              let v: any;
               if (typeof route.validator === "function") {
                 v = route.validator(t.input);
               } else {
@@ -250,6 +258,12 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
             sub.resume = [];
             sub.paused = false;
             cbs.forEach((a) => a.res());
+          }
+        } else if (t.type == "request.cancel") {
+          let controller = requests.get(t.id);
+          if (controller) {
+            requests.delete(t.id);
+            controller.abort(t.message);
           }
         }
       } catch (error) {
