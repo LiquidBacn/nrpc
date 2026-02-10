@@ -1,5 +1,7 @@
+import type { NRPCPromise } from "./index.ts";
+
 export type RouteToProp<T extends Route<C>, C = any> =
-  T extends Query<C, infer V, infer O> ? (inp: V) => Promise<O>
+  T extends Query<C, infer V, infer O> ? (inp: V) => NRPCPromise<O>
   : T extends Subscription<C, infer V, infer O> ?
     (inp: V, backPressure?: number) => Promise<AsyncGenerator<O>>
   : T extends Router<infer CIn, infer COut> ? RoutesToProxy<T["routes"], COut>
