@@ -3,7 +3,6 @@ import type {
   Routes,
   Router,
   Subscription,
-  RouterToProxy,
   Validator,
 } from "./types.ts";
 
@@ -25,18 +24,18 @@ export function query<C, V, O>(
   validator: Validator<V>,
   method: (ctx: C, inp: V, signal: AbortSignal) => O | Promise<O>,
 ): Query<C, V, O>;
-export function query<C, V, O>(validator: any, method?: any): Query<C, any, O> {
-  if (method === undefined) {
+export function query<C, V, O>(arg1: any, arg2?: any): Query<C, any, O> {
+  if (arg2 === undefined) {
     return {
       _tag: "q",
       validator: () => {},
-      method: (ctx, input, signal) => validator(ctx, signal),
+      method: (ctx, input, signal) => arg1(ctx, signal),
     };
   }
   return {
     _tag: "q",
-    validator,
-    method,
+    validator: arg1,
+    method: arg2,
   };
 }
 
