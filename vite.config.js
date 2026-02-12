@@ -16,6 +16,7 @@ export default defineConfig({
       //   client: "./src/client/index.ts",
       // },
     },
+    sourcemap: true,
     emptyOutDir: true,
   },
 });

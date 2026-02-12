@@ -128,7 +128,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
       if (bp) {
         paused = true;
       } else if (toDrain.length) {
-        let item = toDrain.shift();
+        let item = toDrain.shift()!;
         item.res();
       }
     };
@@ -303,7 +303,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
       paused = false;
 
       if (toDrain.length) {
-        let item = toDrain.shift();
+        let item = toDrain.shift()!;
         item.res();
       }
     };

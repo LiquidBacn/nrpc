@@ -39,7 +39,7 @@ export function getClient<R extends Router>(
     if (bp) {
       paused = true;
     } else if (toDrain.length) {
-      let item = toDrain.shift();
+      let item = toDrain.shift()!;
       item.res();
     }
   };
@@ -48,8 +48,8 @@ export function getClient<R extends Router>(
     let sub = subs.get(id);
     if (sub) {
       if (sub.calls.length && sub.data.length) {
-        let data = sub.data.shift();
-        let call = sub.calls.shift();
+        let data = sub.data.shift()!;
+        let call = sub.calls.shift()!;
 
         if (data.k === "v") {
           call?.res({ value: data.val, done: false });
@@ -129,12 +129,13 @@ export function getClient<R extends Router>(
             subs.delete(t.id);
             return { value: undefined, done: true };
           },
-          // [Symbol.asyncDispose]: async () => {
-          //   send({
-          //     id: t.id,
-          //     type: "subscription.end",
-          //   });
-          // },
+          [Symbol.asyncDispose]: async () => {
+            await send({
+              id: t.id,
+              type: "subscription.end",
+            });
+            subs.delete(t.id);
+          },
           [Symbol.asyncIterator]() {
             return this;
           },
@@ -255,7 +256,7 @@ export function getClient<R extends Router>(
     paused = false;
 
     if (toDrain.length) {
-      let item = toDrain.shift();
+      let item = toDrain.shift()!;
       item.res();
     }
   };
