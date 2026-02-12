@@ -5,13 +5,19 @@
     "./src/shared/index.ts"
   ],
   "compilerOptions": {
-    "module": "node20",
+    "module": "nodenext",
     "moduleResolution": "nodenext",
-    "allowImportingTsExtensions": true,
-    "emitDeclarationOnly": true,
+    "strict": true,
     "declaration": true,
+    "strictNullChecks": true,
+    "emitDeclarationOnly": true,
+    "allowImportingTsExtensions": true,
     "outDir": "./dist",
-    "types": ["vite/client"]
+    "types": [
+      "vite/client"
+    ],
   },
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }
