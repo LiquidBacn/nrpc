@@ -10,7 +10,7 @@ import {
 import { z } from "zod";
 
 describe("NRPCServer", () => {
-  let server: NRPCServer<any, any, any>;
+  let server: NRPCServer<any>;
 
   describe("getRoute()", () => {
     beforeEach(() => {
