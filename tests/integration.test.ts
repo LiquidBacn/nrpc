@@ -9,7 +9,7 @@ import {
 describe("Integration: Client ↔ Server", () => {
   describe("Query execution", () => {
     it("executes simple query", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const result = await pair.client.proxy.getGreeting();
 
@@ -17,7 +17,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("executes query with input parameter", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const result = await pair.client.proxy.addNumbers(5);
 
@@ -25,7 +25,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("executes query with validator", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const result = await pair.client.proxy.echoString("hello");
 
@@ -41,7 +41,7 @@ describe("Integration: Client ↔ Server", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, { kind: "test" });
 
       try {
         await pair.client.proxy.throwError();
@@ -52,7 +52,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("returns correct context data", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const result = await pair.client.proxy.getUserInfo();
 
@@ -65,7 +65,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Subscription execution", () => {
     it("executes subscription and receives all data", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const gen = await pair.client.proxy.countUp();
       const results = [];
@@ -81,7 +81,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("executes subscription with input parameter", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const gen = await pair.client.proxy.delayedValue(3);
       const results = [];
@@ -94,7 +94,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles async iteration over subscription", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const gen = await pair.client.proxy.countUp();
 
@@ -114,7 +114,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles subscription cancellation", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const gen = await pair.client.proxy.countUp();
 
@@ -131,7 +131,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Nested router routing", () => {
     it("routes through one level of nesting", async () => {
-      const pair = createLocalTestPair(nestedRouter);
+      const pair = createLocalTestPair(nestedRouter, { kind: "test" });
 
       const result = await pair.client.proxy.admin.secretData();
 
@@ -142,7 +142,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("applies middleware at each nesting level", async () => {
-      const pair = createLocalTestPair(nestedRouter);
+      const pair = createLocalTestPair(nestedRouter, { kind: "test" });
 
       const result = await pair.client.proxy.admin.secretData();
 
@@ -151,7 +151,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("routes through two levels of nesting", async () => {
-      const pair = createLocalTestPair(deepNestedRouter);
+      const pair = createLocalTestPair(deepNestedRouter, { kind: "test" });
 
       const result = await pair.client.proxy.level1.level2.deepValue();
 
@@ -160,7 +160,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("executes subscription in nested router", async () => {
-      const pair = createLocalTestPair(nestedRouter);
+      const pair = createLocalTestPair(nestedRouter, { kind: "test" });
 
       const gen = await pair.client.proxy.admin.adminCount();
       const results = [];
@@ -175,7 +175,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("executes subscription in deeply nested router", async () => {
-      const pair = createLocalTestPair(deepNestedRouter);
+      const pair = createLocalTestPair(deepNestedRouter, { kind: "test" });
 
       const gen = await pair.client.proxy.level1.level2.deepSub();
       const results = [];
@@ -192,7 +192,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Error handling", () => {
     it("handles invalid route path", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       try {
         //@ts-expect-error
@@ -204,7 +204,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles invalid nested route path", async () => {
-      const pair = createLocalTestPair(nestedRouter);
+      const pair = createLocalTestPair(nestedRouter, { kind: "test" });
 
       try {
         //@ts-expect-error
@@ -224,7 +224,7 @@ describe("Integration: Client ↔ Server", () => {
         strictNumber: query(z.number(), (ctx: any, num: number) => num * 2),
       });
 
-      const pair = createLocalTestPair(strictRouter);
+      const pair = createLocalTestPair(strictRouter, { kind: "test" });
 
       try {
         await pair.client.proxy.strictNumber("not-a-number" as any);
@@ -238,7 +238,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Multiple concurrent requests", () => {
     it("handles multiple queries in parallel", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const [result1, result2, result3] = await Promise.all([
         pair.client.proxy.getGreeting(),
@@ -252,7 +252,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles multiple subscriptions in parallel", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const [gen1, gen2] = await Promise.all([
         pair.client.proxy.countUp(),
@@ -273,7 +273,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles mixed queries and subscriptions", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const queryPromise = pair.client.proxy.getGreeting();
       const subPromise = pair.client.proxy.countUp();
@@ -293,7 +293,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Context propagation", () => {
     it("passes context through middleware", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const result = await pair.client.proxy.getUserInfo();
 
@@ -301,7 +301,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("transforms context through middleware chain", async () => {
-      const pair = createLocalTestPair(nestedRouter);
+      const pair = createLocalTestPair(nestedRouter, { kind: "test" });
 
       const result = await pair.client.proxy.admin.secretData();
 
@@ -313,7 +313,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("preserves context across multiple operations", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       const result1 = await pair.client.proxy.getUserInfo();
       const result2 = await pair.client.proxy.getGreeting();
@@ -325,7 +325,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Cleanup", () => {
     it("allows cleanup without errors", async () => {
-      const pair = createLocalTestPair(simpleRouter);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" });
 
       await pair.cleanup();
 
@@ -335,7 +335,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Backpressure: Server → Client", () => {
     it("blocks query responses when server signals backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 50);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 50);
 
       const result = await pair.client.proxy.addNumbers(5);
 
@@ -343,7 +343,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("queues multiple responses during server backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 50);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 50);
 
       const p1 = pair.client.proxy.addNumbers(5);
       const p2 = pair.client.proxy.addNumbers(10);
@@ -356,7 +356,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("unblocks server responses one-at-a-time during backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 50, 50);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 50, 50);
       const timings: number[] = [];
       const start = performance.now();
 
@@ -383,7 +383,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles subscription data with server backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 30);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 30);
 
       const gen = await pair.client.proxy.countUp();
 
@@ -398,14 +398,14 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Backpressure: Client → Server", () => {
     it("blocks requests when client signals backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 0, 50);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 0, 50);
 
       const result = await pair.client.proxy.addNumbers(5);
       expect(result).toBe(15);
     });
 
     it("queues pause/resume messages during client backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 0, 30);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 0, 30);
 
       const gen = await pair.client.proxy.countUp();
 
@@ -418,7 +418,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("queues multiple requests during client backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 0, 50);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 0, 50);
 
       const p1 = pair.client.proxy.addNumbers(1);
       const p2 = pair.client.proxy.addNumbers(2);
@@ -433,7 +433,7 @@ describe("Integration: Client ↔ Server", () => {
 
   describe("Backpressure: Bidirectional", () => {
     it("handles both sides signaling backpressure simultaneously", async () => {
-      const pair = createLocalTestPair(simpleRouter, 30, 30);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 30, 30);
 
       const p1 = await pair.client.proxy.addNumbers(1);
       const p2 = await pair.client.proxy.addNumbers(2);
@@ -444,7 +444,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles subscription with bidirectional backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 25, 25);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 25, 25);
 
       const gen = await pair.client.proxy.countUp();
 
@@ -457,7 +457,7 @@ describe("Integration: Client ↔ Server", () => {
     });
 
     it("handles mixed operations with bidirectional backpressure", async () => {
-      const pair = createLocalTestPair(simpleRouter, 30, 30);
+      const pair = createLocalTestPair(simpleRouter, { kind: "test" }, 30, 30);
 
       const queryPromise = pair.client.proxy.getGreeting();
       const subPromise = pair.client.proxy.countUp();

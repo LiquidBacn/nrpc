@@ -15,13 +15,17 @@ type Call = {
   args: any[];
 };
 
-export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
-  router: Router<CIn, COut, Rts>;
-  constructor(router: Router<CIn, COut, Rts>) {
+export type RouterToCIn<R extends Router> =
+  R extends Router<infer CIn> ? CIn : never;
+
+// export class NRPCServer<CIn, COut, Rts extends Routes<COut>>
+export class NRPCServer<R extends Router<any, any, any>> {
+  router: R;
+  constructor(router: R) {
     this.router = router;
   }
 
-  async getRoute(ctx: CIn, path: string[]) {
+  async getRoute(ctx: RouterToCIn<R>, path: string[]) {
     let c = await this.router.middle(ctx);
     let pointer: Router = this.router;
     let working = [...path];
@@ -49,7 +53,12 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
     return { route: pointer, c } as { route: Route; c: any };
   }
 
-  async call(signal: AbortSignal, ctx: CIn, path: string[], arg?: any) {
+  async call(
+    signal: AbortSignal,
+    ctx: RouterToCIn<R>,
+    path: string[],
+    arg?: any,
+  ) {
     let { route, c } = await this.getRoute(ctx, path);
 
     switch (route._tag) {
@@ -76,7 +85,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
     throw new Error(`Path "${path.join(".")}" incomplete.`);
   }
 
-  getLocalCaller(ctx: CIn) {
+  getLocalCaller(ctx: RouterToCIn<R>) {
     const getProxy = (path: string[]) => {
       return new Proxy(() => {}, {
         get(_, p) {
@@ -108,7 +117,7 @@ export class NRPCServer<CIn, COut, Rts extends Routes<COut>> {
   }
 
   getConnection(
-    ctx: CIn,
+    ctx: RouterToCIn<R>,
     /**
      * send a Message to the client via user provided means.
      * user can return a bool that when true it applies back pressure.

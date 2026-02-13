@@ -13,7 +13,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.fastStream();
@@ -48,7 +48,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.controlledStream();
@@ -79,7 +79,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.rapidStream();
@@ -108,7 +108,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.slowConsumer();
@@ -140,7 +140,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.thresholdTest();
@@ -176,7 +176,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.drainTest();
@@ -207,7 +207,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.errorUnderPressure();
@@ -237,7 +237,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.cancellableStream();
@@ -272,7 +272,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, undefined);
 
       try {
         const gen = await pair.client.proxy.trackedStream();
@@ -310,7 +310,7 @@ describe("Backpressure", () => {
         }),
       });
 
-      const pair = createLocalTestPair(testRouter);
+      const pair = createLocalTestPair(testRouter, { kind: "test" });
 
       try {
         const gen1 = await pair.client.proxy.sub1();

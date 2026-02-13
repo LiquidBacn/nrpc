@@ -7,7 +7,7 @@ import {
   subscription,
   NRPCReqCanceled,
 } from "../src/shared/index.ts";
-import { NRPCServer } from "../src/server/index.ts";
+import { NRPCServer, RouterToCIn } from "../src/server/index.ts";
 import { getClient } from "../src/client/index.ts";
 import type {
   NRPCRequest,
@@ -169,13 +169,8 @@ export const deepNestedRouter = router(
 // TEST PAIR HELPERS
 // ============================================================================
 
-export interface TestPair<
-  R extends Router<CIn, COut, Rts>,
-  CIn = any,
-  COut = any,
-  Rts extends Routes = any,
-> {
-  server: NRPCServer<CIn, COut, Rts>;
+export interface TestPair<R extends Router> {
+  server: NRPCServer<R>;
   client: ReturnType<typeof getClient<R>>;
   send: (msg: NRPCRequest) => void;
   receive: (msg: NRPCResponse) => void;
@@ -200,6 +195,7 @@ export interface ChildProcessTestPair {
 
 export function createLocalTestPair<T extends Router>(
   router: T,
+  context: RouterToCIn<T>,
   serverDelay: number = 0,
   clientDelay: number = 0,
 ): TestPair<T> {
@@ -229,7 +225,7 @@ export function createLocalTestPair<T extends Router>(
   );
 
   const connection = server.getConnection(
-    { kind: "test" },
+    context,
     async (msg) => {
       await serverSend(msg);
       if (serverDelay > 0) {
