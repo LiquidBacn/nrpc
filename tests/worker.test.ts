@@ -135,6 +135,19 @@ describe("Worker Thread Communication", () => {
         await pair.cleanup();
       }
     });
+
+    it("rejects promise with errors from the server", async () => {
+      const pair = await createWorkerTestPair();
+
+      try {
+        let val = await pair.client.proxy.throwError();
+        expect.fail("Should have thrown an error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+      } finally {
+        pair.cleanup();
+      }
+    });
   });
 
   describe("Cancellation", () => {

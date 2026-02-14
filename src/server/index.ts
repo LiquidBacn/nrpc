@@ -6,23 +6,50 @@ import type {
   NRPCRequest,
   NRPCResponse,
   Route,
+  EventsToProxy,
+  EventProp,
+  EventSub,
+  RouterToCIn,
 } from "../shared/types.ts";
 
-type Call = {
-  res: (val: any) => void;
-  rej: (err: any) => void;
-  path: string[];
-  args: any[];
+type EventConnection = {
+  send: (msg: NRPCResponse) => Promise<boolean | void> | boolean | void;
+  subscriptions: Map<string, string[]>;
 };
-
-export type RouterToCIn<R extends Router> =
-  R extends Router<infer CIn> ? CIn : never;
 
 // export class NRPCServer<CIn, COut, Rts extends Routes<COut>>
 export class NRPCServer<R extends Router<any, any, any>> {
   router: R;
+  #connections = new Set<EventConnection>();
+
+  #reg = new FinalizationRegistry<EventConnection>((val) => {
+    this.#connections.delete(val);
+  });
+
   constructor(router: R) {
     this.router = router;
+  }
+
+  get events(): EventsToProxy<R> {
+    const getProxy = (path: string[]): any => {
+      return new Proxy(() => {}, {
+        get(_, p) {
+          if (p === "then") return undefined;
+          if (typeof p === "string") return getProxy([...path, p]);
+        },
+        apply: (_, __, [payload]) => {
+          const pathStr = path.join(".");
+          for (const conn of this.#connections) {
+            for (const [id, subPath] of conn.subscriptions) {
+              if (subPath.join(".") === pathStr) {
+                conn.send({ id, type: "event.data", payload });
+              }
+            }
+          }
+        },
+      });
+    };
+    return getProxy([]);
   }
 
   async getRoute(ctx: RouterToCIn<R>, path: string[]) {
@@ -37,6 +64,7 @@ export class NRPCServer<R extends Router<any, any, any>> {
         switch (route._tag) {
           case "q":
           case "s":
+          case "e":
             return { route, c } as { route: Route; c: any };
 
           case "r": {
@@ -53,39 +81,28 @@ export class NRPCServer<R extends Router<any, any, any>> {
     return { route: pointer, c } as { route: Route; c: any };
   }
 
-  async call(
-    signal: AbortSignal,
-    ctx: RouterToCIn<R>,
-    path: string[],
-    arg?: any,
-  ) {
-    let { route, c } = await this.getRoute(ctx, path);
-
-    switch (route._tag) {
-      case "q": {
-        let v: any;
-        if (typeof route.validator === "function") {
-          v = route.validator(arg);
-        } else {
-          v = route.validator.parse(arg);
-        }
-        return route.method(c, v, signal);
-      }
-      case "s": {
-        let v: any;
-        if (typeof route.validator === "function") {
-          v = route.validator(arg);
-        } else {
-          v = route.validator.parse(arg);
-        }
-        return route.method(c, v);
-      }
-    }
-
-    throw new Error(`Path "${path.join(".")}" incomplete.`);
-  }
-
   getLocalCaller(ctx: RouterToCIn<R>) {
+    let eventSubs = new Map<string, EventSub>();
+    let eventConn: EventConnection = {
+      async send(t) {
+        switch (t.type) {
+          case "event.data": {
+            let eventSub = eventSubs.get(t.id);
+            if (eventSub) {
+              eventSub.callbacks.forEach((cb) => cb(t.payload));
+            }
+            break;
+          }
+          case "event.start":
+          case "event.end":
+        }
+      },
+      subscriptions: new Map(),
+    };
+    this.#connections.add(eventConn);
+
+    let nextID = 0;
+
     const getProxy = (path: string[]) => {
       return new Proxy(() => {}, {
         get(_, p) {
@@ -100,7 +117,55 @@ export class NRPCServer<R extends Router<any, any, any>> {
           return new NRPCPromise(
             async (res, rej) => {
               try {
-                let rt = await this.call(controller.signal, ctx, path, args[0]);
+                let arg = args[0];
+                let signal = controller.signal;
+                let rt;
+
+                let { route, c } = await this.getRoute(ctx, path);
+
+                switch (route._tag) {
+                  case "q": {
+                    let v: any;
+                    if (typeof route.validator === "function") {
+                      v = route.validator(arg);
+                    } else {
+                      v = route.validator.parse(arg);
+                    }
+                    rt = await route.method(c, v, signal);
+                    break;
+                  }
+                  case "s": {
+                    let v: any;
+                    if (typeof route.validator === "function") {
+                      v = route.validator(arg);
+                    } else {
+                      v = route.validator.parse(arg);
+                    }
+                    rt = await route.method(c, v);
+                    break;
+                  }
+                  case "e": {
+                    const id = `event_${nextID++}`;
+                    const callbacks = new Set<(value: any) => void>();
+                    const close = () => {
+                      eventSubs.delete(id);
+                      eventConn.subscriptions.delete(id);
+                    };
+                    eventSubs.set(id, { callbacks });
+
+                    eventConn.subscriptions.set(id, path);
+
+                    rt = {
+                      on: (cb: (value: any) => void) => callbacks.add(cb),
+                      close,
+                    } as EventProp<any>;
+                    break;
+                  }
+                  case "r": {
+                    throw new Error(`Path "${path.join(".")}" incomplete.`);
+                  }
+                }
+
                 res(rt);
               } catch (e) {
                 rej(e);
@@ -113,7 +178,12 @@ export class NRPCServer<R extends Router<any, any, any>> {
         },
       });
     };
-    return getProxy([]) as any as RouterToProxy<typeof this.router>;
+
+    let rt = getProxy([]) as any as RouterToProxy<R>;
+
+    this.#reg.register(rt, eventConn);
+
+    return rt;
   }
 
   getConnection(
@@ -152,6 +222,12 @@ export class NRPCServer<R extends Router<any, any, any>> {
         resume: { res: () => void; rej: (err: any) => void }[];
       }
     >();
+
+    const eventConn: EventConnection = {
+      send,
+      subscriptions: new Map(),
+    };
+    this.#connections.add(eventConn);
 
     const onMsg = async (msg: any) => {
       if (closed) return;
@@ -240,6 +316,11 @@ export class NRPCServer<R extends Router<any, any, any>> {
 
               return;
             }
+            case "e": {
+              eventConn.subscriptions.set(t.id, t.path);
+              await send({ id: t.id, type: "event.start" });
+              return;
+            }
           }
 
           throw new Error(`Path "${t.path.join(".")}" incomplete.`);
@@ -251,6 +332,7 @@ export class NRPCServer<R extends Router<any, any, any>> {
               a.rej(new NRPCSubEnded("NRPC Sub Ended")),
             );
           }
+          eventConn.subscriptions.delete(t.id);
         } else if (t.type == "subscription.error") {
           let sub = activeSubs.get(t.id);
           activeSubs.delete(t.id);
@@ -296,6 +378,7 @@ export class NRPCServer<R extends Router<any, any, any>> {
     const onClose = () => {
       if (closed) return;
       closed = true;
+      this.#connections.delete(eventConn);
 
       let arr = toDrain;
       toDrain = [];
@@ -317,6 +400,8 @@ export class NRPCServer<R extends Router<any, any, any>> {
       }
     };
 
-    return { onMsg, onClose, drain, paused: () => paused };
+    let rt = { onMsg, onClose, drain, paused: () => paused };
+    this.#reg.register(rt, eventConn);
+    return rt;
   }
 }

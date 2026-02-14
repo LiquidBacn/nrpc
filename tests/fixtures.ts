@@ -7,13 +7,13 @@ import {
   subscription,
   NRPCReqCanceled,
 } from "../src/shared/index.ts";
-import { NRPCServer, RouterToCIn } from "../src/server/index.ts";
+import { NRPCServer } from "../src/server/index.ts";
 import { getClient } from "../src/client/index.ts";
 import type {
   NRPCRequest,
   NRPCResponse,
   Router,
-  Routes,
+  RouterToCIn,
 } from "../src/shared/types.ts";
 
 // Test context type
@@ -83,6 +83,10 @@ export const simpleRouter = router(
         console.log("Request canceled");
       }
       return "One Second Later.";
+    }),
+
+    throwError: query(() => {
+      throw new NRPCReqCanceled("Oh No!");
     }),
   },
 );

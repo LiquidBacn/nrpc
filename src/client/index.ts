@@ -1,5 +1,6 @@
 import { NRPCConnClosed, NRPCPromise } from "../shared/index.ts";
 import type {
+  EventSub,
   NRPCRequest,
   NRPCResponse,
   Router,
@@ -16,7 +17,6 @@ type Sub = {
   resume: number;
   gen: AsyncGenerator;
 };
-
 export function getClient<R extends Router>(
   sendMsg: (msg: NRPCRequest) => Promise<boolean | void> | boolean | void,
   close: () => void,
@@ -27,6 +27,7 @@ export function getClient<R extends Router>(
 
   let inFlight = new Map<string, Call>();
   let subs = new Map<string, Sub>();
+  let eventSubs = new Map<string, EventSub>();
   let toDrain: { res: () => void; rej: (error: any) => void }[] = [];
 
   const send = async (msg: NRPCRequest) => {
@@ -187,6 +188,34 @@ export function getClient<R extends Router>(
         }
         break;
       }
+      case "event.start": {
+        let call = inFlight.get(t.id);
+        if (call) {
+          inFlight.delete(t.id);
+          const callbacks = new Set<(value: any) => void>();
+          const close = () => {
+            eventSubs.delete(t.id);
+            send({ id: t.id, type: "subscription.end" });
+          };
+          eventSubs.set(t.id, { callbacks });
+          call.res({
+            on: (cb: (value: any) => void) => callbacks.add(cb),
+            close,
+          });
+        }
+        break;
+      }
+      case "event.data": {
+        let eventSub = eventSubs.get(t.id);
+        if (eventSub) {
+          eventSub.callbacks.forEach((cb) => cb(t.payload));
+        }
+        break;
+      }
+      case "event.end": {
+        eventSubs.delete(t.id);
+        break;
+      }
     }
   };
   const onClose = () => {
@@ -205,6 +234,11 @@ export function getClient<R extends Router>(
       sub.done = true;
       deQueueSub(id);
     }
+
+    // for (let [id, eventSub] of eventSubs) {
+    //   eventSub.res(undefined);
+    // }
+    eventSubs.clear();
   };
 
   const getProxy = (path: string[]) => {

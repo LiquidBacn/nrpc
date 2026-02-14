@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { NRPCServer } from "../src/server/index.ts";
-import { router, query, subscription } from "../src/shared/index.ts";
+import { router, query, subscription, event } from "../src/shared/index.ts";
 import {
   simpleRouter,
   nestedRouter,
@@ -63,148 +63,6 @@ describe("NRPCServer", () => {
       expect(result.c.userId).toContain("L1");
       expect(result.c.userId).toContain("L2");
     });
-
-    it("throws error for incomplete nested path", async () => {
-      const nestedServer = new NRPCServer(nestedRouter);
-      await expect(
-        nestedServer.call(AbortSignal.timeout(5000), { kind: "test" }, [
-          "admin",
-        ]),
-      ).rejects.toThrow();
-    });
-  });
-
-  describe("call()", () => {
-    beforeEach(() => {
-      server = new NRPCServer(simpleRouter);
-    });
-
-    it("executes a query method", async () => {
-      const result = await server.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["getGreeting"],
-        undefined,
-      );
-      expect(result).toBe("Hello user123!");
-    });
-
-    it("executes a query with validator", async () => {
-      const result = await server.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["addNumbers"],
-        5 as any,
-      );
-      expect(result).toBe(15);
-    });
-
-    it("executes a query with string validator", async () => {
-      const result = await server.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["echoString"],
-        "hello" as any,
-      );
-      expect(result).toBe("HELLO");
-    });
-
-    it("returns async iterator for subscription", async () => {
-      const result = await server.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["countUp"],
-        undefined,
-      );
-      expect((result as any)[Symbol.asyncIterator]).toBeDefined();
-
-      const values: any[] = [];
-      for await (const val of result as any) {
-        values.push(val);
-      }
-      expect(values).toHaveLength(3);
-      expect(values[0]).toEqual({ count: 0, userId: "user123" });
-    });
-
-    it("passes input to subscription method", async () => {
-      const result = await server.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["delayedValue"],
-        3 as any,
-      );
-      const values: any[] = [];
-      for await (const val of result as any) {
-        values.push(val);
-      }
-      expect(values).toEqual([3, 6]); // 3 * 1, 3 * 2
-    });
-
-    it("throws error for non-existent route", async () => {
-      await expect(
-        server.call(
-          AbortSignal.timeout(5000),
-          { kind: "test" },
-          ["nonExistent"],
-          undefined,
-        ),
-      ).rejects.toThrow();
-    });
-
-    it("throws error for invalid validator", async () => {
-      const testRouter = router((ctx: any) => ctx, {
-        strictNumber: query(z.number(), (ctx: any, num: number) => num),
-      });
-      const strictServer = new NRPCServer(testRouter);
-      await expect(
-        strictServer.call(
-          AbortSignal.timeout(5000),
-          { kind: "test" },
-          ["strictNumber"],
-          "not-a-number",
-        ),
-      ).rejects.toThrow();
-    });
-
-    it("propagates errors thrown in method", async () => {
-      const errorRouter = router((ctx: any) => ctx, {
-        throwError: query(() => {
-          throw new Error("Method error");
-        }),
-      });
-      const errorServer = new NRPCServer(errorRouter);
-      await expect(
-        errorServer.call(AbortSignal.timeout(5000), { kind: "test" }, [
-          "throwError",
-        ]),
-      ).rejects.toThrow("Method error");
-    });
-
-    it("executes nested query with middleware transformation", async () => {
-      const nestedServer = new NRPCServer(nestedRouter);
-      const result = await nestedServer.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["admin", "secretData"],
-      );
-      expect(result).toEqual({ secret: "admin-only", userId: "user456" });
-    });
-
-    it("executes deeply nested subscription", async () => {
-      const deepServer = new NRPCServer(deepNestedRouter);
-      const result = await deepServer.call(
-        AbortSignal.timeout(5000),
-        { kind: "test" },
-        ["level1", "level2", "deepSub"],
-        undefined,
-      );
-      const values: any[] = [];
-      for await (const val of result as any) {
-        values.push(val);
-      }
-      expect(values).toHaveLength(2);
-      expect(values[0]).toHaveProperty("depth", 2);
-    });
   });
 
   describe("getLocalCaller()", () => {
@@ -264,6 +122,31 @@ describe("NRPCServer", () => {
       const errorServer = new NRPCServer(errorRouter);
       const caller = errorServer.getLocalCaller({ kind: "test" });
       await expect(caller.nested.throwError()).rejects.toThrow("Nested error");
+    });
+
+    it("handles events correctly", async () => {
+      const eventRouter = router((c) => c, {
+        test: event<number>(),
+      });
+      const server = new NRPCServer(eventRouter);
+
+      const caller = server.getLocalCaller(undefined);
+
+      const test = await caller.test();
+
+      let lastVal: undefined | number = undefined;
+      test.on((val) => {
+        if (val > 5) {
+          test.close();
+        }
+        lastVal = val;
+      });
+
+      for (let i = 0; i < 10; i++) {
+        server.events.test(i);
+      }
+
+      expect(lastVal).toBe(6);
     });
   });
 
