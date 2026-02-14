@@ -22,10 +22,6 @@ export class NRPCServer<R extends Router<any, any, any>> {
   router: R;
   #connections = new Set<EventConnection>();
 
-  #reg = new FinalizationRegistry<EventConnection>((val) => {
-    this.#connections.delete(val);
-  });
-
   constructor(router: R) {
     this.router = router;
   }
@@ -179,11 +175,12 @@ export class NRPCServer<R extends Router<any, any, any>> {
       });
     };
 
-    let rt = getProxy([]) as any as RouterToProxy<R>;
-
-    this.#reg.register(rt, eventConn);
-
-    return rt;
+    return {
+      proxy: getProxy([]) as any as RouterToProxy<R>,
+      close: () => {
+        this.#connections.delete(eventConn);
+      },
+    };
   }
 
   getConnection(
@@ -400,8 +397,6 @@ export class NRPCServer<R extends Router<any, any, any>> {
       }
     };
 
-    let rt = { onMsg, onClose, drain, paused: () => paused };
-    this.#reg.register(rt, eventConn);
-    return rt;
+    return { onMsg, onClose, drain, paused: () => paused };
   }
 }

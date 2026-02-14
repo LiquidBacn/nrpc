@@ -5,6 +5,8 @@
     "./src/shared/index.ts"
   ],
   "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ESNext", "DOM"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "strict": true,
