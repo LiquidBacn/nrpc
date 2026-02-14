@@ -1,4 +1,5 @@
 import type {
+  Event,
   Query,
   Routes,
   Router,
@@ -62,4 +63,10 @@ export function subscription<C, V, O>(
     validator,
     method,
   };
+}
+
+export function event<O = any>(): Event<O>;
+export function event<O = any>(validator: Validator<O>): Event<O>;
+export function event<O = any>(validator?: Validator<O>): Event<O> {
+  return { _tag: "e", validator };
 }

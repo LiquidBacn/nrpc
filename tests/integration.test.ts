@@ -475,3 +475,168 @@ describe("Integration: Client ↔ Server", () => {
     });
   });
 });
+
+describe("Event System", () => {
+  it("subscribes to and receives events", async () => {
+    const { router, query, event } = await import("../src/shared/index.ts");
+    const testRouter = router((ctx: any) => ctx, {
+      userUpdate: event<{ userId: string; name: string }>(),
+    });
+
+    const pair = createLocalTestPair(testRouter, { kind: "test" });
+
+    const subscription = await pair.client.proxy.userUpdate();
+    const received: { userId: string; name: string }[] = [];
+
+    subscription.on((data) => {
+      received.push(data);
+    });
+
+    pair.server.events.userUpdate({ userId: "1", name: "Alice" });
+    pair.server.events.userUpdate({ userId: "2", name: "Bob" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received).toHaveLength(2);
+    expect(received[0]).toEqual({ userId: "1", name: "Alice" });
+    expect(received[1]).toEqual({ userId: "2", name: "Bob" });
+
+    subscription.close();
+  });
+
+  it("supports nested event paths", async () => {
+    const { router, event } = await import("../src/shared/index.ts");
+    const testRouter = router((ctx: any) => ctx, {
+      users: router(() => ({}), {
+        created: event<{ id: number }>(),
+        deleted: event<{ id: number }>(),
+      }),
+    });
+
+    const pair = createLocalTestPair(testRouter, { kind: "test" });
+
+    const createdSub = await pair.client.proxy.users.created();
+    const deletedSub = await pair.client.proxy.users.deleted();
+
+    const created: { id: number }[] = [];
+    const deleted: { id: number }[] = [];
+
+    createdSub.on((data) => created.push(data));
+    deletedSub.on((data) => deleted.push(data));
+
+    pair.server.events.users.created({ id: 1 });
+    pair.server.events.users.deleted({ id: 2 });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(created).toEqual([{ id: 1 }]);
+    expect(deleted).toEqual([{ id: 2 }]);
+
+    createdSub.close();
+    deletedSub.close();
+  });
+
+  it("broadcasts to multiple connections", async () => {
+    const { router, event } = await import("../src/shared/index.ts");
+    const { NRPCServer } = await import("../src/server/index.ts");
+    const { getClient } = await import("../src/client/index.ts");
+    const testRouter = router((ctx: any) => ctx, {
+      notify: event<{ message: string }>(),
+    });
+
+    const server = new NRPCServer(testRouter);
+
+    let conn1: ReturnType<typeof server.getConnection>;
+    let conn2: ReturnType<typeof server.getConnection>;
+
+    const client1 = getClient<typeof testRouter>(
+      (msg) => conn1.onMsg(msg),
+      () => {},
+    );
+    const client2 = getClient<typeof testRouter>(
+      (msg) => conn2.onMsg(msg),
+      () => {},
+    );
+
+    conn1 = server.getConnection(
+      { kind: "test" },
+      (msg) => client1.onMsg(msg),
+      () => {},
+    );
+    conn2 = server.getConnection(
+      { kind: "test" },
+      (msg) => client2.onMsg(msg),
+      () => {},
+    );
+
+    const sub1 = await client1.proxy.notify();
+    const sub2 = await client2.proxy.notify();
+
+    const received1: { message: string }[] = [];
+    const received2: { message: string }[] = [];
+
+    sub1.on((data) => received1.push(data));
+    sub2.on((data) => received2.push(data));
+
+    server.events.notify({ message: "hello" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received1).toHaveLength(1);
+    expect(received2).toHaveLength(1);
+    expect(received1[0].message).toBe("hello");
+    expect(received2[0].message).toBe("hello");
+
+    sub1.close();
+    sub2.close();
+  });
+
+  it("stops receiving events after close", async () => {
+    const { router, event } = await import("../src/shared/index.ts");
+    const testRouter = router((ctx: any) => ctx, {
+      ping: event<{ value: number }>(),
+    });
+
+    const pair = createLocalTestPair(testRouter, { kind: "test" });
+
+    const sub = await pair.client.proxy.ping();
+    const received: { value: number }[] = [];
+
+    sub.on((data) => received.push(data));
+
+    pair.server.events.ping({ value: 1 });
+    await new Promise((r) => setTimeout(r, 10));
+
+    sub.close();
+
+    pair.server.events.ping({ value: 2 });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received).toHaveLength(1);
+    expect(received[0].value).toBe(1);
+  });
+
+  it("supports multiple callbacks per subscription", async () => {
+    const { router, event } = await import("../src/shared/index.ts");
+    const testRouter = router((ctx: any) => ctx, {
+      update: event<{ value: number }>(),
+    });
+
+    const pair = createLocalTestPair(testRouter, { kind: "test" });
+
+    const sub = await pair.client.proxy.update();
+    const received1: number[] = [];
+    const received2: number[] = [];
+
+    sub.on((data) => received1.push(data.value));
+    sub.on((data) => received2.push(data.value));
+
+    pair.server.events.update({ value: 42 });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received1).toEqual([42]);
+    expect(received2).toEqual([42]);
+
+    sub.close();
+  });
+});

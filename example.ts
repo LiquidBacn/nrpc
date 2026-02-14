@@ -1,12 +1,12 @@
 import { Worker, isMainThread, parentPort } from "worker_threads";
 
-import { query, router, subscription } from "./src/shared/index.ts";
+import { event, query, router, subscription } from "./src/shared/index.ts";
 import { NRPCServer } from "./src/server/index.ts";
 import { getClient } from "./src/client/index.ts";
 import z from "zod";
 
 // nrpc/index.ts
-let r = router(
+let exampleRouter = router(
   (ctx: { kind: string }) => {
     if (ctx.kind == "local") {
       throw new Error("no local callers!");
@@ -15,7 +15,7 @@ let r = router(
   },
   {
     queryTest: query((ctx) => {
-      console.log("[router] got request for getT");
+      console.log("[router] got request for queryTest");
       return { hello: "world" };
     }),
 
@@ -52,9 +52,11 @@ let r = router(
         await new Promise((res) => setTimeout(res, 10));
       }
     }),
+
+    eventTest: event(z.object({ n: z.number(), a: z.string().optional() })),
   },
 );
-export type AppRouter = typeof r;
+export type AppRouter = typeof exampleRouter;
 
 if (isMainThread) {
   // nrpc/main.ts
@@ -111,6 +113,19 @@ if (isMainThread) {
       console.log("[Main] i =", i);
       await new Promise((res) => setTimeout(res, 100));
     }
+
+    let done = Promise.withResolvers<void>();
+    let events = 0;
+    let e = await client.proxy.eventTest();
+
+    e.on((val) => {
+      console.log("Event:", val);
+      events++;
+
+      if (events > 5) done.resolve();
+    });
+
+    return done.promise;
   };
 
   test().then(() => {
@@ -118,7 +133,7 @@ if (isMainThread) {
   });
 } else if (parentPort) {
   // nrpc/worker.ts
-  const server = new NRPCServer(r);
+  const server = new NRPCServer(exampleRouter);
 
   let conn = server.getConnection(
     { kind: "ws" },
@@ -131,4 +146,10 @@ if (isMainThread) {
   parentPort.on("message", (msg) => {
     conn.onMsg(msg);
   });
+
+  let n = 0;
+  setInterval(() => {
+    server.events.eventTest({ n, a: n % 2 == 0 ? "Hello!" : undefined });
+    n++;
+  }, 500);
 }
