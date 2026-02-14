@@ -1,16 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { NRPCServer } from "../src/server/index.ts";
-import { router, query, subscription, event } from "../src/shared/index.ts";
-import {
-  simpleRouter,
-  nestedRouter,
-  deepNestedRouter,
-  TestContext,
-} from "./fixtures.ts";
+import { router, query, event } from "../src/shared/index.ts";
+import { simpleRouter, nestedRouter, deepNestedRouter } from "./fixtures.ts";
 import { z } from "zod";
 
 describe("NRPCServer", () => {
-  let server: NRPCServer<any>;
+  let server: NRPCServer<typeof simpleRouter>;
 
   describe("getRoute()", () => {
     beforeEach(() => {
@@ -76,19 +71,19 @@ describe("NRPCServer", () => {
     });
 
     it("allows calling queries via proxy", async () => {
-      const caller = server.getLocalCaller({ kind: "test" }) as any;
+      const caller = server.getLocalCaller({ kind: "test" }).proxy;
       const result = await caller.getGreeting();
       expect(result).toBe("Hello user123!");
     });
 
     it("allows calling queries with parameters via proxy", async () => {
-      const caller = server.getLocalCaller({ kind: "test" }) as any;
+      const caller = server.getLocalCaller({ kind: "test" }).proxy;
       const result = await caller.addNumbers(7);
       expect(result).toBe(17);
     });
 
     it("allows calling subscriptions via proxy", async () => {
-      const caller = server.getLocalCaller({ kind: "test" }) as any;
+      const caller = server.getLocalCaller({ kind: "test" }).proxy;
       const gen = await caller.countUp();
       const values: any[] = [];
       for await (const val of gen) {
@@ -99,14 +94,14 @@ describe("NRPCServer", () => {
 
     it("allows accessing nested routes via proxy", async () => {
       const nestedServer = new NRPCServer(nestedRouter);
-      const caller = nestedServer.getLocalCaller({ kind: "test" });
+      const caller = nestedServer.getLocalCaller({ kind: "test" }).proxy;
       const result = await caller.admin.secretData();
       expect(result).toEqual({ secret: "admin-only", userId: "user456" });
     });
 
     it("allows accessing deeply nested routes", async () => {
       const deepServer = new NRPCServer(deepNestedRouter);
-      const caller = deepServer.getLocalCaller({ kind: "test" });
+      const caller = deepServer.getLocalCaller({ kind: "test" }).proxy;
       const result = await caller.level1.level2.deepValue();
       expect(result).toContain("Level2");
     });
@@ -120,7 +115,7 @@ describe("NRPCServer", () => {
         }),
       });
       const errorServer = new NRPCServer(errorRouter);
-      const caller = errorServer.getLocalCaller({ kind: "test" });
+      const caller = errorServer.getLocalCaller({ kind: "test" }).proxy;
       await expect(caller.nested.throwError()).rejects.toThrow("Nested error");
     });
 
@@ -130,7 +125,7 @@ describe("NRPCServer", () => {
       });
       const server = new NRPCServer(eventRouter);
 
-      const caller = server.getLocalCaller(undefined);
+      const caller = server.getLocalCaller(undefined).proxy;
 
       const test = await caller.test();
 
