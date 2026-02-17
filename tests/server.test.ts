@@ -67,7 +67,9 @@ describe("NRPCServer", () => {
 
     it("returns a proxy function", () => {
       const caller = server.getLocalCaller({ kind: "test" });
-      expect(typeof caller).toBe("function");
+      expect(typeof caller).toBe("object");
+      expect(typeof caller.proxy).toBe("function");
+      expect(typeof caller.close).toBe("function");
     });
 
     it("allows calling queries via proxy", async () => {

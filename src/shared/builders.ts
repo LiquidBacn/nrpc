@@ -65,8 +65,14 @@ export function subscription<C, V, O>(
   };
 }
 
-export function event<O = any>(): Event<O>;
-export function event<O = any>(validator: Validator<O>): Event<O>;
-export function event<O = any>(validator?: Validator<O>): Event<O> {
-  return { _tag: "e", validator };
+/**
+ * @example
+ * ```ts
+ * event<{newIds: number[]}>()
+ * ```
+ */
+export function event(): Event<void>;
+export function event<O>(): Event<O>;
+export function event<O>(): Event<O> {
+  return { _tag: "e" };
 }
