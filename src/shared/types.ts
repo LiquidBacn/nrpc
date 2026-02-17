@@ -8,17 +8,27 @@ export type EventProp<O> = {
 export type EventToProp<T extends Event> =
   T extends Event<infer O> ? () => Promise<EventProp<O>> : never;
 
-export type RouteToProp<T extends Route<C>, C = any> =
-  T extends Query<C, infer V, infer O> ? (inp: V) => NRPCPromise<O>
-  : T extends Subscription<C, infer V, infer O> ?
+export type SubToProp<T extends Subscription> =
+  T extends Subscription<any, infer V, infer O> ?
+    /**
+     * @param inp Input data for the subscription
+     * @param backPressure Has a default of 10
+     */
     (inp: V, backPressure?: number) => Promise<AsyncGenerator<O>>
-  : T extends Event ? EventToProp<T>
-  : T extends Router<infer CIn, infer COut> ? RoutesToProxy<T["routes"], COut>
   : never;
 
-type FilterKeys<T, V> = {
-  [K in keyof T]: T[K] extends V ? K : never;
-}[keyof T];
+export type QueryToProp<T extends Query> =
+  T extends Query<any, infer V, infer O> ? (inp: V) => NRPCPromise<O> : never;
+
+export type RouterToProp<T extends Router> =
+  T extends Router ? RoutesToProxy<T["routes"]> : never;
+
+export type RouteToProp<T extends Route> =
+  T extends Query ? QueryToProp<T>
+  : T extends Subscription ? SubToProp<T>
+  : T extends Event ? EventToProp<T>
+  : T extends Router ? RouterToProp<T>
+  : never;
 
 export type RouterToProxy<R extends Router> =
   R extends Router ? RoutesToProxy<R["routes"]> : never;
@@ -27,7 +37,6 @@ export type EventsToProxy<R extends Router> =
   R extends Router ? RoutesToEmitter<R["routes"]> : never;
 
 export type RoutesToEmitter<T extends Routes> = {
-  // [K in FilterKeys<T, Event | Router>]: RouteToEmitter<T[K]>;
   [K in keyof T]: RouteToEmitter<T[K]>;
 };
 
@@ -38,8 +47,8 @@ export type RouteToEmitter<T extends Route> =
 
 export type Routes<C = any> = Record<string, Route<C>>;
 
-export type RoutesToProxy<T extends Routes<C>, C = any> = {
-  [K in keyof T]: RouteToProp<T[K], C>;
+export type RoutesToProxy<T extends Routes> = {
+  [K in keyof T]: RouteToProp<T[K]>;
 };
 
 export type Validator<T = any> = CustomValidator<T> | ZodValidator<T>;
@@ -62,7 +71,6 @@ export interface Subscription<C = any, V = any, O = any> {
 
 export interface Event<O = any> {
   _tag: "e";
-  validator?: Validator<O>;
 }
 
 export interface Router<CIn = any, COut = any, R extends Routes<COut> = any> {
@@ -85,7 +93,8 @@ export type NRPCRequest =
   | { id: string; type: "subscription.end" }
   | { id: string; type: "subscription.error"; error: any }
   | { id: string; type: "subscription.pause" }
-  | { id: string; type: "subscription.resume" };
+  | { id: string; type: "subscription.resume" }
+  | { id: string; type: "event.end" };
 
 // Server -> Client
 export type NRPCResponse =
@@ -96,5 +105,4 @@ export type NRPCResponse =
   | { id: string; type: "subscription.end" } // Subscription complete
   | { id: string; type: "error"; error: any }
   | { id: string; type: "event.start" }
-  | { id: string; type: "event.data"; payload: unknown }
-  | { id: string; type: "event.end" };
+  | { id: string; type: "event.data"; payload: unknown };

@@ -195,7 +195,7 @@ export function getClient<R extends Router>(
           const callbacks = new Set<(value: any) => void>();
           const close = () => {
             eventSubs.delete(t.id);
-            send({ id: t.id, type: "subscription.end" });
+            send({ id: t.id, type: "event.end" });
           };
           eventSubs.set(t.id, { callbacks });
           call.res({
@@ -210,10 +210,6 @@ export function getClient<R extends Router>(
         if (eventSub) {
           eventSub.callbacks.forEach((cb) => cb(t.payload));
         }
-        break;
-      }
-      case "event.end": {
-        eventSubs.delete(t.id);
         break;
       }
     }
@@ -235,9 +231,6 @@ export function getClient<R extends Router>(
       deQueueSub(id);
     }
 
-    // for (let [id, eventSub] of eventSubs) {
-    //   eventSub.res(undefined);
-    // }
     eventSubs.clear();
   };
 

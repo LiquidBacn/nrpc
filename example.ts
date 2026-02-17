@@ -53,7 +53,8 @@ let exampleRouter = router(
       }
     }),
 
-    eventTest: event(z.object({ n: z.number(), a: z.string().optional() })),
+    eventTest: event<{ n: number; a?: string }>(),
+    voidEvent: event(),
   },
 );
 export type AppRouter = typeof exampleRouter;
@@ -116,9 +117,9 @@ if (isMainThread) {
 
     let done = Promise.withResolvers<void>();
     let events = 0;
-    let e = await client.proxy.eventTest();
+    let eventTest = await client.proxy.eventTest();
 
-    e.on((val) => {
+    eventTest.on((val) => {
       console.log("Event:", val);
       events++;
 

@@ -1,6 +1,5 @@
 import { NRPCConnClosed, NRPCPromise, NRPCSubEnded } from "../shared/index.ts";
 import type {
-  Routes,
   Router,
   RouterToProxy,
   NRPCRequest,
@@ -14,10 +13,9 @@ import type {
 
 type EventConnection = {
   send: (msg: NRPCResponse) => Promise<boolean | void> | boolean | void;
-  subscriptions: Map<string, string[]>;
+  subscriptions: Map<string, Set<string>>;
 };
 
-// export class NRPCServer<CIn, COut, Rts extends Routes<COut>>
 export class NRPCServer<R extends Router<any, any, any>> {
   router: R;
   #connections = new Set<EventConnection>();
@@ -36,8 +34,9 @@ export class NRPCServer<R extends Router<any, any, any>> {
         apply: (_, __, [payload]) => {
           const pathStr = path.join(".");
           for (const conn of this.#connections) {
-            for (const [id, subPath] of conn.subscriptions) {
-              if (subPath.join(".") === pathStr) {
+            let ids = conn.subscriptions.get(pathStr);
+            if (ids) {
+              for (let id of ids) {
                 conn.send({ id, type: "event.data", payload });
               }
             }
@@ -90,7 +89,6 @@ export class NRPCServer<R extends Router<any, any, any>> {
             break;
           }
           case "event.start":
-          case "event.end":
         }
       },
       subscriptions: new Map(),
@@ -145,11 +143,18 @@ export class NRPCServer<R extends Router<any, any, any>> {
                     const callbacks = new Set<(value: any) => void>();
                     const close = () => {
                       eventSubs.delete(id);
-                      eventConn.subscriptions.delete(id);
+                      // eventConn.subscriptions.delete(id);
+                      ids?.delete(id);
                     };
                     eventSubs.set(id, { callbacks });
 
-                    eventConn.subscriptions.set(id, path);
+                    let ids = eventConn.subscriptions.get(path.join("."));
+                    if (ids) {
+                      ids.add(id);
+                    } else {
+                      ids = new Set([id]);
+                      eventConn.subscriptions.set(path.join("."), ids);
+                    }
 
                     rt = {
                       on: (cb: (value: any) => void) => callbacks.add(cb),
@@ -314,7 +319,14 @@ export class NRPCServer<R extends Router<any, any, any>> {
               return;
             }
             case "e": {
-              eventConn.subscriptions.set(t.id, t.path);
+              let set = eventConn.subscriptions.get(t.path.join("."));
+              if (set) {
+                set.add(t.id);
+              } else {
+                set = new Set([t.id]);
+                eventConn.subscriptions.set(t.path.join("."), set);
+              }
+
               await send({ id: t.id, type: "event.start" });
               return;
             }
@@ -329,19 +341,18 @@ export class NRPCServer<R extends Router<any, any, any>> {
               a.rej(new NRPCSubEnded("NRPC Sub Ended")),
             );
           }
-          eventConn.subscriptions.delete(t.id);
-        } else if (t.type == "subscription.error") {
+        } else if (t.type === "subscription.error") {
           let sub = activeSubs.get(t.id);
           activeSubs.delete(t.id);
           if (sub) {
             sub.resume.forEach((a) => a.rej(t.error));
           }
-        } else if (t.type == "subscription.pause") {
+        } else if (t.type === "subscription.pause") {
           let sub = activeSubs.get(t.id);
           if (sub) {
             sub.paused = true;
           }
-        } else if (t.type == "subscription.resume") {
+        } else if (t.type === "subscription.resume") {
           let sub = activeSubs.get(t.id);
           if (sub) {
             let cbs = sub.resume;
@@ -349,12 +360,16 @@ export class NRPCServer<R extends Router<any, any, any>> {
             sub.paused = false;
             cbs.forEach((a) => a.res());
           }
-        } else if (t.type == "request.cancel") {
+        } else if (t.type === "request.cancel") {
           let controller = requests.get(t.id);
           if (controller) {
             requests.delete(t.id);
             controller.abort(t.message);
           }
+        } else if (t.type === "event.end") {
+          eventConn.subscriptions.forEach((val) => {
+            val.delete(t.id);
+          });
         }
       } catch (error) {
         try {
