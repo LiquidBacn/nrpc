@@ -1,5 +1,8 @@
 {
-  "cSpell.ignoreWords": ["nrpc"],
+  "cSpell.ignoreWords": [
+    "nrpc",
+    "bvklive"
+  ],
   "cSpell.ignorePaths": [
     "package-lock.json",
     "node_modules",

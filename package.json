@@ -1,10 +1,14 @@
 {
-  "name": "nrpc",
+  "name": "@bvklive/nrpc",
   "version": "0.0.0",
   "description": "Hackable typed RPC",
   "license": "ISC",
   "author": "BVK",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LiquidBacn/nrpc.git"
+  },
   "exports": {
     "./server": {
       "types": "./dist/server/index.d.ts",
