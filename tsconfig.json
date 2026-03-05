@@ -2,7 +2,8 @@
   "include": [
     "./src/server/index.ts",
     "./src/client/index.ts",
-    "./src/shared/index.ts"
+    "./src/shared/index.ts",
+    "./src/balancer/index.ts"
   ],
   "compilerOptions": {
     "target": "ES2022",
@@ -17,7 +18,7 @@
     "outDir": "./dist",
     "types": [
       "vite/client"
-    ],
+    ]
   },
   "exclude": [
     "node_modules"

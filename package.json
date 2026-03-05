@@ -2,7 +2,7 @@
   "name": "@bvklive/nrpc",
   "version": "0.0.0",
   "description": "Hackable typed RPC",
-  "license": "ISC",
+  "license": "MIT",
   "author": "BVK",
   "type": "module",
   "repository": {
@@ -25,7 +25,12 @@
       "require": "./dist/shared/index.cjs",
       "import": "./dist/shared/index.js"
     },
-    "./shared/*": "./dist/shared/*"
+    "./shared/*": "./dist/shared/*",
+    "./balancer": {
+      "types": "./dist/balancer/index.d.ts",
+      "require": "./dist/balancer/index.cjs",
+      "import": "./dist/balancer/index.js"
+    }
   },
   "scripts": {
     "build": "vite build && tsc",
