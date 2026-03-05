@@ -8,6 +8,7 @@ export default defineConfig({
         "server/index": "./src/server/index.ts",
         "client/index": "./src/client/index.ts",
         "shared/index": "./src/shared/index.ts",
+        "balancer/index": "./src/balancer/index.ts",
       },
     },
     rollupOptions: {
