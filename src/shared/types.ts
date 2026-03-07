@@ -86,15 +86,26 @@ export type EventSub = {
   callbacks: Set<(value: any) => void>;
 };
 
+type TargetedRequest = {
+  bid?: string;
+};
+
 // Client -> Server
 export type NRPCRequest =
-  | { id: string; type: "request"; path: string[]; input: unknown }
-  | { id: string; type: "request.cancel"; message?: string }
-  | { id: string; type: "subscription.end" }
-  | { id: string; type: "subscription.error"; error: any }
-  | { id: string; type: "subscription.pause" }
-  | { id: string; type: "subscription.resume" }
-  | { id: string; type: "event.end" };
+  | ({
+      id: string;
+      type: "request";
+      path: string[];
+      input: unknown;
+    } & TargetedRequest)
+  | ({ id: string; type: "request.cancel"; message?: string } & TargetedRequest)
+  | ({ id: string; type: "subscription.end" } & TargetedRequest)
+  | ({ id: string; type: "subscription.error"; error: any } & TargetedRequest)
+  | ({ id: string; type: "subscription.pause" } & TargetedRequest)
+  | ({ id: string; type: "subscription.resume" } & TargetedRequest)
+  | ({ id: string; type: "event.end" } & TargetedRequest)
+  | { id: string; type: "backend.reserve" }
+  | { id: string; type: "backend.release"; bid: string };
 
 // Server -> Client
 export type NRPCResponse =
@@ -105,4 +116,6 @@ export type NRPCResponse =
   | { id: string; type: "subscription.end" } // Subscription complete
   | { id: string; type: "error"; error: any }
   | { id: string; type: "event.start" }
-  | { id: string; type: "event.data"; payload: unknown };
+  | { id: string; type: "event.data"; payload: unknown }
+  | { id: string; type: "backend.reserved"; bid: string }
+  | { id: string; type: "backend.released"; bid: string };
