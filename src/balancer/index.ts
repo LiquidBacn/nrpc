@@ -1,6 +1,11 @@
 import type { NRPCRequest, NRPCResponse } from "../shared/types.ts";
+import { Queue, QueueClear } from "./queue.ts";
+
+export { Queue, QueueClear };
 
 type ActiveKind = "pending" | "subscription" | "event";
+
+type RequestMessage = Extract<NRPCRequest, { type: "request" }>;
 
 type ActiveRequest = {
   connectionId: string;
@@ -11,17 +16,60 @@ type ActiveRequest = {
 type InFlightRequest = {
   backendId: string;
   kind: ActiveKind;
+  bid?: string;
 };
 
-type QueueItem = {
+type IncomingQueueItem =
+  | {
+      kind: "request";
+      requestId: string;
+      connectionId: string;
+      request: RequestMessage;
+    }
+  | {
+      kind: "reservation";
+      reservationId: string;
+      connectionId: string;
+      queue: Queue<LeaseQueueItem>;
+    };
+
+type LeaseQueueItem =
+  | {
+      kind: "request";
+      requestId: string;
+      connectionId: string;
+      request: RequestMessage;
+    }
+  | {
+      kind: "close";
+      releaseRequestId: string;
+      connectionId: string;
+      bid: string;
+    };
+
+type PendingQueuedRequest = {
   connectionId: string;
-  request: Extract<NRPCRequest, { type: "request" }>;
-  targetBackendId?: string;
+  requestId: string;
+  bid?: string;
+  canceled: boolean;
+  assigned: boolean;
 };
 
 type PendingDrain = {
   res: () => void;
   rej: (error: any) => void;
+};
+
+type LeaseState = {
+  reservationId: string;
+  connectionId: string;
+  backendId?: string;
+  queue: Queue<LeaseQueueItem>;
+  status: "pending" | "active" | "closing" | "closed";
+  reserveRequestId: string;
+  pendingReleaseRequestId?: string;
+  queuedRequestIds: Set<string>;
+  acknowledged: boolean;
 };
 
 type BackendState = {
@@ -33,7 +81,9 @@ type BackendState = {
   toDrain: PendingDrain[];
   busy: boolean;
   active?: ActiveRequest;
-  leasedConnectionId?: string;
+  lease?: LeaseState;
+  readyWaiters: (() => void)[];
+  workerAbort: AbortController;
 };
 
 type FrontendState = {
@@ -44,8 +94,9 @@ type FrontendState = {
   paused: boolean;
   toDrain: PendingDrain[];
   inFlight: Map<string, InFlightRequest>;
-  dedicatedBackendId?: string;
-  dedicatedInvalidated: boolean;
+  leases: Map<string, LeaseState>;
+  pendingReservations: Map<string, LeaseState>;
+  pendingQueuedRequests: Map<string, PendingQueuedRequest>;
 };
 
 export type NRPCBalancerBackend = {
@@ -61,9 +112,6 @@ export type NRPCBalancerConnection = {
   id: string;
   onMsg: (msg: any) => Promise<void>;
   onClose: () => void;
-  acquireDedicated: () => string;
-  releaseDedicated: () => void;
-  dedicatedBackendId: () => string | undefined;
   drain: () => void;
   paused: () => boolean;
 };
@@ -71,10 +119,12 @@ export type NRPCBalancerConnection = {
 export class NRPCBalancer {
   #nextBackendId = 0;
   #nextConnectionId = 0;
-  #backendOrder: string[] = [];
+  #nextReservationId = 0;
   #backends = new Map<string, BackendState>();
   #connections = new Map<string, FrontendState>();
-  #queue: QueueItem[] = [];
+  #incoming = new Queue<IncomingQueueItem>();
+  #leasesByReservationId = new Map<string, LeaseState>();
+  #leasesByBid = new Map<string, LeaseState>();
 
   addBackend(input: {
     id?: string;
@@ -93,11 +143,12 @@ export class NRPCBalancer {
       paused: false,
       toDrain: [],
       busy: false,
+      readyWaiters: [],
+      workerAbort: new AbortController(),
     };
 
     this.#backends.set(id, backend);
-    this.#backendOrder.push(id);
-    this.#drainQueue();
+    void this.#runBackendWorker(backend);
 
     return {
       id,
@@ -110,7 +161,7 @@ export class NRPCBalancer {
       remove: () => {
         this.#closeBackend(backend, new Error("Backend removed."));
         this.#backends.delete(backend.id);
-        this.#backendOrder = this.#backendOrder.filter((v) => v !== backend.id);
+        this.#failPendingReservationsIfNoBackends();
       },
       drain: () => {
         this.#drainBackend(backend);
@@ -133,7 +184,9 @@ export class NRPCBalancer {
       paused: false,
       toDrain: [],
       inFlight: new Map(),
-      dedicatedInvalidated: false,
+      leases: new Map(),
+      pendingReservations: new Map(),
+      pendingQueuedRequests: new Map(),
     };
     this.#connections.set(id, connection);
 
@@ -145,9 +198,6 @@ export class NRPCBalancer {
       onClose: () => {
         this.#closeConnection(connection);
       },
-      acquireDedicated: () => this.acquireDedicated(connection.id),
-      releaseDedicated: () => this.releaseDedicated(connection.id),
-      dedicatedBackendId: () => connection.dedicatedBackendId,
       drain: () => {
         this.#drainConnection(connection);
       },
@@ -155,37 +205,31 @@ export class NRPCBalancer {
     };
   }
 
-  acquireDedicated(connectionId: string): string {
-    const connection = this.#connections.get(connectionId);
-    if (!connection || connection.closed) {
-      throw new Error(`Connection "${connectionId}" not found.`);
+  async #runBackendWorker(backend: BackendState) {
+    while (!backend.closed) {
+      await this.#waitForBackendReady(backend);
+      if (backend.closed) return;
+
+      try {
+        if (backend.lease) {
+          const item = await backend.lease.queue.read(
+            backend.workerAbort.signal,
+          );
+          await this.#handleLeaseQueueItem(backend, item);
+        } else {
+          const item = await this.#incoming.read(backend.workerAbort.signal);
+          await this.#handleIncomingQueueItem(backend, item);
+        }
+      } catch (error) {
+        if (backend.closed || backend.workerAbort.signal.aborted) {
+          return;
+        }
+        if (error instanceof QueueClear) {
+          continue;
+        }
+        throw error;
+      }
     }
-
-    if (connection.dedicatedBackendId) {
-      return connection.dedicatedBackendId;
-    }
-
-    const backend = this.#findFirst((candidate) => {
-      if (!candidate.alive || candidate.closed || candidate.busy) return false;
-      if (candidate.leasedConnectionId) return false;
-      return true;
-    });
-
-    if (!backend) {
-      throw new Error("No backend available for dedicated lease.");
-    }
-
-    backend.leasedConnectionId = connection.id;
-    connection.dedicatedBackendId = backend.id;
-    connection.dedicatedInvalidated = false;
-    return backend.id;
-  }
-
-  releaseDedicated(connectionId: string) {
-    const connection = this.#connections.get(connectionId);
-    if (!connection) return;
-    this.#releaseDedicatedFor(connection);
-    this.#drainQueue();
   }
 
   async #onFrontendMessage(connection: FrontendState, msg: any) {
@@ -194,21 +238,13 @@ export class NRPCBalancer {
 
     const t = msg as NRPCRequest;
 
-    if (t.type === "request") {
-      if (connection.dedicatedInvalidated) {
-        connection.dedicatedInvalidated = false;
-        await this.#sendToConnection(connection, {
-          id: t.id,
-          type: "error",
-          error: new Error("Dedicated backend unavailable."),
-        });
-        return;
-      }
-      await this.#dispatchRequest(connection, t);
-      return;
-    }
-
-    if (
+    if (t.type === "backend.reserve") {
+      await this.#queueReservation(connection, t.id);
+    } else if (t.type === "backend.release") {
+      await this.#queueLeaseRelease(connection, t.id, t.bid);
+    } else if (t.type === "request") {
+      await this.#queueRequest(connection, t);
+    } else if (
       t.type !== "request.cancel" &&
       t.type !== "subscription.end" &&
       t.type !== "subscription.error" &&
@@ -217,53 +253,228 @@ export class NRPCBalancer {
       t.type !== "event.end"
     ) {
       return;
-    }
+    } else {
+      const inFlight = connection.inFlight.get(t.id);
+      if (inFlight) {
+        const backend = this.#backends.get(inFlight.backendId);
+        if (backend && backend.alive && !backend.closed) {
+          await this.#sendToBackend(backend, t);
+        }
 
-    const inFlight = connection.inFlight.get(t.id);
-    if (!inFlight) return;
-
-    const backend = this.#backends.get(inFlight.backendId);
-    if (backend && backend.alive && !backend.closed) {
-      await this.#sendToBackend(backend, t);
-    }
-
-    if (
-      t.type === "request.cancel" ||
-      t.type === "subscription.end" ||
-      t.type === "subscription.error" ||
-      t.type === "event.end"
-    ) {
-      this.#completeRequest(connection.id, t.id, inFlight.backendId);
+        if (
+          t.type === "request.cancel" ||
+          t.type === "subscription.end" ||
+          t.type === "subscription.error" ||
+          t.type === "event.end"
+        ) {
+          this.#completeRequest(connection.id, t.id, inFlight.backendId);
+        }
+      } else {
+        const pending = connection.pendingQueuedRequests.get(t.id);
+        if (
+          pending &&
+          (t.type === "request.cancel" ||
+            t.type === "subscription.end" ||
+            t.type === "subscription.error" ||
+            t.type === "event.end")
+        ) {
+          pending.canceled = true;
+        }
+      }
     }
   }
 
-  async #dispatchRequest(
-    connection: FrontendState,
-    request: Extract<NRPCRequest, { type: "request" }>,
-  ) {
-    let targetBackendId: string | undefined;
-    if (connection.dedicatedBackendId) {
-      targetBackendId = connection.dedicatedBackendId;
-    }
+  async #queueRequest(connection: FrontendState, request: RequestMessage) {
+    const bid = request.bid;
+    if (bid) {
+      const lease = connection.leases.get(bid);
+      if (!lease || lease.status !== "active") {
+        await this.#sendToConnection(connection, {
+          id: request.id,
+          type: "error",
+          error: new Error("Dedicated backend unavailable."),
+        });
+        return;
+      }
 
-    const backend = this.#pickBackend(targetBackendId);
-    if (!backend) {
-      this.#queue.push({
+      connection.pendingQueuedRequests.set(request.id, {
+        connectionId: connection.id,
+        requestId: request.id,
+        bid,
+        canceled: false,
+        assigned: false,
+      });
+      lease.queuedRequestIds.add(request.id);
+      lease.queue.write({
+        kind: "request",
+        requestId: request.id,
         connectionId: connection.id,
         request,
-        targetBackendId,
+      });
+    } else {
+      connection.pendingQueuedRequests.set(request.id, {
+        connectionId: connection.id,
+        requestId: request.id,
+        canceled: false,
+        assigned: false,
+      });
+      this.#incoming.write({
+        kind: "request",
+        requestId: request.id,
+        connectionId: connection.id,
+        request,
+      });
+    }
+  }
+
+  async #queueReservation(connection: FrontendState, requestId: string) {
+    const reservationId = `lease_${this.#nextReservationId++}`;
+    const lease: LeaseState = {
+      reservationId,
+      connectionId: connection.id,
+      queue: new Queue<LeaseQueueItem>(),
+      status: "pending",
+      reserveRequestId: requestId,
+      queuedRequestIds: new Set(),
+      acknowledged: false,
+    };
+
+    connection.pendingReservations.set(reservationId, lease);
+    this.#leasesByReservationId.set(reservationId, lease);
+    this.#incoming.write({
+      kind: "reservation",
+      reservationId,
+      connectionId: connection.id,
+      queue: lease.queue,
+    });
+  }
+
+  async #queueLeaseRelease(
+    connection: FrontendState,
+    requestId: string,
+    bid: string,
+  ) {
+    const lease = connection.leases.get(bid);
+    if (
+      !lease ||
+      lease.status === "closed" ||
+      lease.connectionId !== connection.id
+    ) {
+      await this.#sendToConnection(connection, {
+        id: requestId,
+        type: "error",
+        error: new Error("Dedicated backend unavailable."),
       });
       return;
     }
 
-    this.#activateRequest(connection, backend, request);
-    await this.#sendToBackend(backend, request);
+    if (lease.status !== "active") {
+      await this.#sendToConnection(connection, {
+        id: requestId,
+        type: "error",
+        error: new Error("Backend lease already closing."),
+      });
+      return;
+    }
+
+    lease.status = "closing";
+    lease.pendingReleaseRequestId = requestId;
+    lease.queue.write({
+      kind: "close",
+      releaseRequestId: requestId,
+      connectionId: connection.id,
+      bid,
+    });
+  }
+
+  async #handleIncomingQueueItem(
+    backend: BackendState,
+    item: IncomingQueueItem,
+  ) {
+    if (!backend.alive || backend.closed || backend.busy) {
+      return;
+    }
+
+    if (item.kind === "request") {
+      const connection = this.#connections.get(item.connectionId);
+      const pending = connection?.pendingQueuedRequests.get(item.requestId);
+      if (
+        !connection ||
+        connection.closed ||
+        !pending ||
+        pending.canceled ||
+        pending.assigned
+      ) {
+        return;
+      }
+
+      this.#activateRequest(connection, backend, item.request);
+      pending.assigned = true;
+      connection.pendingQueuedRequests.delete(item.requestId);
+      await this.#sendToBackend(backend, item.request);
+    } else {
+      const lease = this.#leasesByReservationId.get(item.reservationId);
+      const connection = this.#connections.get(item.connectionId);
+      if (
+        !lease ||
+        lease.status !== "pending" ||
+        !connection ||
+        connection.closed ||
+        connection.pendingReservations.get(item.reservationId) !== lease
+      ) {
+        return;
+      }
+
+      lease.backendId = backend.id;
+      lease.status = "active";
+      backend.lease = lease;
+      connection.pendingReservations.delete(item.reservationId);
+      connection.leases.set(backend.id, lease);
+      this.#leasesByBid.set(backend.id, lease);
+
+      await this.#sendToConnection(connection, {
+        id: lease.reserveRequestId,
+        type: "backend.reserved",
+        bid: backend.id,
+      });
+      lease.acknowledged = true;
+    }
+  }
+
+  async #handleLeaseQueueItem(backend: BackendState, item: LeaseQueueItem) {
+    const lease = backend.lease;
+    if (!lease || lease.backendId !== backend.id) {
+      return;
+    }
+
+    if (item.kind === "request") {
+      const connection = this.#connections.get(item.connectionId);
+      const pending = connection?.pendingQueuedRequests.get(item.requestId);
+      if (
+        !connection ||
+        connection.closed ||
+        !pending ||
+        pending.canceled ||
+        pending.assigned
+      ) {
+        lease.queuedRequestIds.delete(item.requestId);
+        return;
+      }
+
+      this.#activateRequest(connection, backend, item.request);
+      pending.assigned = true;
+      connection.pendingQueuedRequests.delete(item.requestId);
+      lease.queuedRequestIds.delete(item.requestId);
+      await this.#sendToBackend(backend, item.request);
+    } else if (item.bid === backend.id) {
+      await this.#finalizeLease(backend, lease, item.releaseRequestId);
+    }
   }
 
   #activateRequest(
     connection: FrontendState,
     backend: BackendState,
-    request: Extract<NRPCRequest, { type: "request" }>,
+    request: RequestMessage,
   ) {
     backend.busy = true;
     backend.active = {
@@ -275,6 +486,7 @@ export class NRPCBalancer {
     connection.inFlight.set(request.id, {
       backendId: backend.id,
       kind: "pending",
+      bid: request.bid,
     });
   }
 
@@ -303,26 +515,22 @@ export class NRPCBalancer {
       const inFlight = connection.inFlight.get(t.id);
       if (inFlight) inFlight.kind = "subscription";
       await this.#sendToConnection(connection, t);
-      return;
-    }
-
-    if (t.type === "event.start") {
+    } else if (t.type === "event.start") {
       backend.active.kind = "event";
       const inFlight = connection.inFlight.get(t.id);
       if (inFlight) inFlight.kind = "event";
       await this.#sendToConnection(connection, t);
-      return;
-    }
+    } else {
+      await this.#sendToConnection(connection, t);
 
-    await this.#sendToConnection(connection, t);
-
-    if (
-      t.type === "result" ||
-      t.type === "error" ||
-      t.type === "subscription.end" ||
-      t.type === "subscription.error"
-    ) {
-      this.#completeRequest(connection.id, t.id, backend.id);
+      if (
+        t.type === "result" ||
+        t.type === "error" ||
+        t.type === "subscription.end" ||
+        t.type === "subscription.error"
+      ) {
+        this.#completeRequest(connection.id, t.id, backend.id);
+      }
     }
   }
 
@@ -379,99 +587,99 @@ export class NRPCBalancer {
     ) {
       backend.active = undefined;
       backend.busy = false;
+      this.#notifyBackendReady(backend);
     }
-
-    this.#drainQueue();
   }
 
-  #pickBackend(targetBackendId?: string) {
-    if (targetBackendId) {
-      const backend = this.#backends.get(targetBackendId);
-      if (!backend || !backend.alive || backend.closed || backend.busy) {
-        return undefined;
-      }
-      return backend;
+  async #finalizeLease(
+    backend: BackendState,
+    lease: LeaseState,
+    releaseRequestId?: string,
+  ) {
+    backend.lease = undefined;
+    lease.status = "closed";
+    this.#leasesByReservationId.delete(lease.reservationId);
+    if (lease.backendId) {
+      this.#leasesByBid.delete(lease.backendId);
     }
 
-    return this.#findFirst((backend) => {
-      if (!backend.alive || backend.closed || backend.busy) return false;
-      if (backend.leasedConnectionId) return false;
-      return true;
+    const connection = this.#connections.get(lease.connectionId);
+    if (connection) {
+      if (lease.backendId) {
+        connection.leases.delete(lease.backendId);
+      }
+      connection.pendingReservations.delete(lease.reservationId);
+    }
+
+    const shouldAck =
+      !!releaseRequestId &&
+      releaseRequestId === lease.pendingReleaseRequestId &&
+      connection &&
+      !connection.closed;
+
+    lease.pendingReleaseRequestId = undefined;
+    lease.backendId = undefined;
+
+    if (shouldAck) {
+      await this.#sendToConnection(connection, {
+        id: releaseRequestId!,
+        type: "backend.released",
+        bid: backend.id,
+      });
+    }
+  }
+
+  async #waitForBackendReady(backend: BackendState) {
+    if (backend.closed) return;
+    if (!backend.busy && !backend.paused) {
+      return;
+    }
+
+    await new Promise<void>((res) => {
+      backend.readyWaiters.push(res);
     });
   }
 
-  #findFirst(predicate: (backend: BackendState) => boolean) {
-    for (const id of this.#backendOrder) {
-      const backend = this.#backends.get(id);
-      if (!backend) continue;
-      if (predicate(backend)) return backend;
-    }
-    return undefined;
-  }
-
-  #drainQueue() {
-    let progressed = true;
-    while (progressed) {
-      progressed = false;
-
-      for (let i = 0; i < this.#queue.length; i++) {
-        const item = this.#queue[i];
-        const connection = this.#connections.get(item.connectionId);
-        if (!connection || connection.closed) {
-          this.#queue.splice(i, 1);
-          progressed = true;
-          break;
-        }
-
-        if (connection.dedicatedInvalidated && !connection.dedicatedBackendId) {
-          connection.dedicatedInvalidated = false;
-          this.#queue.splice(i, 1);
-          void this.#sendToConnection(connection, {
-            id: item.request.id,
-            type: "error",
-            error: new Error("Dedicated backend unavailable."),
-          });
-          progressed = true;
-          break;
-        }
-
-        const backend = this.#pickBackend(item.targetBackendId);
-        if (!backend) {
-          if (item.targetBackendId) {
-            const target = this.#backends.get(item.targetBackendId);
-            if (!target || !target.alive || target.closed) {
-              this.#queue.splice(i, 1);
-              void this.#sendToConnection(connection, {
-                id: item.request.id,
-                type: "error",
-                error: new Error("Dedicated backend unavailable."),
-              });
-              progressed = true;
-              break;
-            }
-          }
-          continue;
-        }
-
-        this.#queue.splice(i, 1);
-        this.#activateRequest(connection, backend, item.request);
-        void this.#sendToBackend(backend, item.request);
-        progressed = true;
-        break;
-      }
+  #notifyBackendReady(backend: BackendState) {
+    while (backend.readyWaiters.length) {
+      const waiter = backend.readyWaiters.shift()!;
+      waiter();
     }
   }
 
-  #releaseDedicatedFor(connection: FrontendState) {
-    const backendId = connection.dedicatedBackendId;
-    connection.dedicatedBackendId = undefined;
-    connection.dedicatedInvalidated = false;
-    if (!backendId) return;
+  #markPendingRequestCanceled(connection: FrontendState, requestId: string) {
+    const pending = connection.pendingQueuedRequests.get(requestId);
+    if (!pending) return;
 
-    const backend = this.#backends.get(backendId);
-    if (backend?.leasedConnectionId === connection.id) {
-      backend.leasedConnectionId = undefined;
+    pending.canceled = true;
+    if (pending.bid) {
+      const lease =
+        connection.leases.get(pending.bid) ??
+        this.#leasesByBid.get(pending.bid);
+      lease?.queuedRequestIds.delete(requestId);
     }
+  }
+
+  #enqueueLeaseClose(lease: LeaseState, releaseRequestId: string) {
+    if (lease.status === "closed") return;
+    if (lease.status === "pending") {
+      lease.status = "closed";
+      this.#leasesByReservationId.delete(lease.reservationId);
+      const connection = this.#connections.get(lease.connectionId);
+      connection?.pendingReservations.delete(lease.reservationId);
+      return;
+    }
+
+    if (lease.status === "active") {
+      lease.status = "closing";
+    }
+
+    lease.queue.write({
+      kind: "close",
+      releaseRequestId,
+      connectionId: lease.connectionId,
+      bid: lease.backendId!,
+    });
   }
 
   #closeConnection(connection: FrontendState) {
@@ -483,7 +691,24 @@ export class NRPCBalancer {
     connection.closed = true;
     this.#connections.delete(connection.id);
 
-    this.#queue = this.#queue.filter((item) => item.connectionId !== connection.id);
+    for (const lease of connection.pendingReservations.values()) {
+      lease.status = "closed";
+      this.#leasesByReservationId.delete(lease.reservationId);
+    }
+    connection.pendingReservations.clear();
+
+    for (const requestId of connection.pendingQueuedRequests.keys()) {
+      this.#markPendingRequestCanceled(connection, requestId);
+    }
+
+    for (const lease of connection.leases.values()) {
+      for (const requestId of lease.queuedRequestIds) {
+        this.#markPendingRequestCanceled(connection, requestId);
+      }
+      if (lease.status !== "closed") {
+        this.#enqueueLeaseClose(lease, `release_${lease.reservationId}`);
+      }
+    }
 
     const active = [...connection.inFlight.entries()];
     connection.inFlight.clear();
@@ -492,19 +717,31 @@ export class NRPCBalancer {
       const backend = this.#backends.get(info.backendId);
       if (backend && backend.alive && !backend.closed) {
         if (info.kind === "subscription") {
-          void this.#sendToBackend(backend, { id: requestId, type: "subscription.end" });
+          void this.#sendToBackend(backend, {
+            id: requestId,
+            type: "subscription.end",
+            bid: info.bid,
+          });
         } else if (info.kind === "event") {
-          void this.#sendToBackend(backend, { id: requestId, type: "event.end" });
+          void this.#sendToBackend(backend, {
+            id: requestId,
+            type: "event.end",
+            bid: info.bid,
+          });
         } else {
-          void this.#sendToBackend(backend, { id: requestId, type: "request.cancel" });
+          void this.#sendToBackend(backend, {
+            id: requestId,
+            type: "request.cancel",
+            bid: info.bid,
+          });
         }
       }
 
       this.#completeRequest(connection.id, requestId, info.backendId);
     }
 
-    this.#releaseDedicatedFor(connection);
-    this.#drainQueue();
+    connection.leases.clear();
+    connection.pendingQueuedRequests.clear();
     connection.close();
   }
 
@@ -522,12 +759,80 @@ export class NRPCBalancer {
       const next = backend.toDrain.shift()!;
       next.res();
     }
+    this.#notifyBackendReady(backend);
+  }
+
+  #failLease(lease: LeaseState, error: Error) {
+    const connection = this.#connections.get(lease.connectionId);
+
+    if (!lease.acknowledged) {
+      if (connection && !connection.closed) {
+        void this.#sendToConnection(connection, {
+          id: lease.reserveRequestId,
+          type: "error",
+          error,
+        });
+      }
+    } else {
+      for (const requestId of lease.queuedRequestIds) {
+        const pending = connection?.pendingQueuedRequests.get(requestId);
+        if (!pending) continue;
+        if (connection) {
+          connection.pendingQueuedRequests.delete(requestId);
+        }
+        if (connection && !connection.closed && !pending.canceled) {
+          void this.#sendToConnection(connection, {
+            id: requestId,
+            type: "error",
+            error: new Error("Dedicated backend unavailable."),
+          });
+        }
+      }
+    }
+
+    lease.queuedRequestIds.clear();
+
+    if (lease.pendingReleaseRequestId && connection && !connection.closed) {
+      void this.#sendToConnection(connection, {
+        id: lease.pendingReleaseRequestId,
+        type: "error",
+        error: new Error("Dedicated backend unavailable."),
+      });
+    }
+
+    if (lease.backendId) {
+      connection?.leases.delete(lease.backendId);
+      this.#leasesByBid.delete(lease.backendId);
+    }
+    connection?.pendingReservations.delete(lease.reservationId);
+    this.#leasesByReservationId.delete(lease.reservationId);
+    lease.pendingReleaseRequestId = undefined;
+    lease.status = "closed";
+    lease.backendId = undefined;
+  }
+
+  #failPendingReservationsIfNoBackends() {
+    const hasLiveBackend = [...this.#backends.values()].some(
+      (backend) => backend.alive && !backend.closed,
+    );
+    if (hasLiveBackend) {
+      return;
+    }
+
+    for (const lease of this.#leasesByReservationId.values()) {
+      if (lease.status !== "pending") continue;
+      this.#failLease(
+        lease,
+        new Error("No backend available for dedicated lease."),
+      );
+    }
   }
 
   #closeBackend(backend: BackendState, error?: unknown) {
     if (backend.closed) return;
     backend.closed = true;
     backend.alive = false;
+    backend.workerAbort.abort(new Error(`Backend "${backend.id}" closed.`));
 
     const inflight = backend.active;
     if (inflight) {
@@ -547,37 +852,27 @@ export class NRPCBalancer {
           });
         }
       }
-      this.#completeRequest(inflight.connectionId, inflight.requestId, backend.id);
+      this.#completeRequest(
+        inflight.connectionId,
+        inflight.requestId,
+        backend.id,
+      );
     }
 
-    if (backend.leasedConnectionId) {
-      const connection = this.#connections.get(backend.leasedConnectionId);
-      if (connection) {
-        connection.dedicatedBackendId = undefined;
-        connection.dedicatedInvalidated = true;
-      }
+    if (backend.lease) {
+      this.#failLease(
+        backend.lease,
+        new Error("Dedicated backend unavailable."),
+      );
+      backend.lease = undefined;
     }
-    backend.leasedConnectionId = undefined;
 
     const arr = backend.toDrain;
     backend.toDrain = [];
-    arr.forEach((item) => item.rej(new Error(`Backend "${backend.id}" closed.`)));
-
-    for (let i = this.#queue.length - 1; i >= 0; i--) {
-      const item = this.#queue[i];
-      if (item.targetBackendId !== backend.id) continue;
-      this.#queue.splice(i, 1);
-      const connection = this.#connections.get(item.connectionId);
-      if (connection && !connection.closed) {
-        void this.#sendToConnection(connection, {
-          id: item.request.id,
-          type: "error",
-          error: new Error("Dedicated backend unavailable."),
-        });
-      }
-    }
-
-    this.#drainQueue();
+    arr.forEach((item) =>
+      item.rej(new Error(`Backend "${backend.id}" closed.`)),
+    );
+    this.#notifyBackendReady(backend);
+    this.#failPendingReservationsIfNoBackends();
   }
 }
-

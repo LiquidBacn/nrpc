@@ -1,13 +1,18 @@
 import { NRPCConnClosed, NRPCPromise } from "../shared/index.ts";
 import type {
-  EventSub,
   NRPCRequest,
   NRPCResponse,
   Router,
   RouterToProxy,
 } from "../shared/types.ts";
 
-type Call = { res: (val: any) => void; rej: (err?: any) => void; back: number };
+type Call = {
+  res: (val: any) => void;
+  rej: (err?: any) => void;
+  back: number;
+  bid?: string;
+};
+
 type Sub = {
   data: ({ k: "v"; val: any } | { k: "e"; err: any })[];
   calls: Call[];
@@ -16,7 +21,38 @@ type Sub = {
   back: number;
   resume: number;
   gen: AsyncGenerator;
+  bid?: string;
 };
+
+type ClientEventSub = {
+  callbacks: Set<(value: any) => void>;
+  bid?: string;
+};
+
+type LeaseState<R extends Router> = {
+  bid: string;
+  status: "active" | "releasing" | "released";
+  releasePromise?: Promise<void>;
+  handle: NRPCBackendLease<R>;
+};
+
+type ReserveOp<R extends Router> = {
+  res: (val: NRPCBackendLease<R>) => void;
+  rej: (err?: any) => void;
+};
+
+type ReleaseOp = {
+  bid: string;
+  res: () => void;
+  rej: (err?: any) => void;
+};
+
+export type NRPCBackendLease<R extends Router> = {
+  bid: string;
+  proxy: RouterToProxy<R>;
+  release: () => Promise<void>;
+};
+
 export function getClient<R extends Router>(
   sendMsg: (msg: NRPCRequest) => Promise<boolean | void> | boolean | void,
   close: () => void,
@@ -27,8 +63,16 @@ export function getClient<R extends Router>(
 
   let inFlight = new Map<string, Call>();
   let subs = new Map<string, Sub>();
-  let eventSubs = new Map<string, EventSub>();
+  let eventSubs = new Map<string, ClientEventSub>();
+  let reserveOps = new Map<string, ReserveOp<R>>();
+  let releaseOps = new Map<string, ReleaseOp>();
+  let leases = new Map<string, LeaseState<R>>();
   let toDrain: { res: () => void; rej: (error: any) => void }[] = [];
+
+  const nextMessageId = () => `nrpc_${nextId++}`;
+
+  const addBid = <T extends { id: string; type: string }>(msg: T, bid?: string) =>
+    bid ? { ...msg, bid } : msg;
 
   const send = async (msg: NRPCRequest) => {
     if (paused || toDrain.length) {
@@ -36,12 +80,26 @@ export function getClient<R extends Router>(
         toDrain.push({ res, rej });
       });
     }
+
     let bp = await sendMsg(msg);
     if (bp) {
       paused = true;
     } else if (toDrain.length) {
       let item = toDrain.shift()!;
       item.res();
+    }
+  };
+
+  const getLeaseState = (bid?: string) => {
+    if (!bid) return undefined;
+    return leases.get(bid);
+  };
+
+  const assertLeaseActive = (bid?: string) => {
+    if (!bid) return;
+    const lease = getLeaseState(bid);
+    if (!lease || lease.status !== "active") {
+      throw new Error("Backend lease released.");
     }
   };
 
@@ -53,7 +111,7 @@ export function getClient<R extends Router>(
         let call = sub.calls.shift()!;
 
         if (data.k === "v") {
-          call?.res({ value: data.val, done: false });
+          call.res({ value: data.val, done: false });
         } else if (data.k === "e") {
           call.rej(data.err);
         }
@@ -61,7 +119,7 @@ export function getClient<R extends Router>(
         if (sub.data.length < sub.resume && sub.paused) {
           sub.paused = false;
 
-          await send({ id, type: "subscription.resume" });
+          await send(addBid({ id, type: "subscription.resume" }, sub.bid));
         }
       } else if (sub.done && sub.calls.length && !sub.data.length) {
         if (closed) {
@@ -72,6 +130,112 @@ export function getClient<R extends Router>(
         subs.delete(id);
       }
     }
+  };
+
+  const startLeaseRelease = (lease: LeaseState<R>) => {
+    if (lease.status === "released") {
+      return Promise.resolve();
+    }
+    if (lease.releasePromise) {
+      return lease.releasePromise;
+    }
+
+    lease.status = "releasing";
+
+    const id = nextMessageId();
+    lease.releasePromise = new Promise<void>((res, rej) => {
+      releaseOps.set(id, {
+        bid: lease.bid,
+        res: () => {
+          lease.status = "released";
+          leases.delete(lease.bid);
+          res();
+        },
+        rej: (err) => {
+          lease.status = "released";
+          leases.delete(lease.bid);
+          rej(err);
+        },
+      });
+
+      void send({
+        id,
+        type: "backend.release",
+        bid: lease.bid,
+      }).catch((error) => {
+        releaseOps.delete(id);
+        lease.status = "released";
+        leases.delete(lease.bid);
+        rej(error);
+      });
+    });
+
+    return lease.releasePromise;
+  };
+
+  const getProxy = (path: string[], bid?: string) => {
+    return new Proxy(() => {}, {
+      get(_, p) {
+        if (p === "then") {
+          return undefined;
+        } else if (typeof p === "string") {
+          return getProxy([...path, p], bid);
+        }
+      },
+      apply: (_, __, args) => {
+        if (closed) {
+          return Promise.reject(new NRPCConnClosed());
+        }
+
+        try {
+          assertLeaseActive(bid);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+
+        let back = 10;
+        if (typeof args[1] === "number" && args[1] > 0) {
+          back = args[1];
+        }
+
+        let id = nextMessageId();
+        return new NRPCPromise(
+          async (res, rej) => {
+            inFlight.set(id, { res, rej, back, bid });
+
+            try {
+              await send(
+                addBid(
+                  {
+                    id,
+                    type: "request",
+                    path,
+                    input: args[0],
+                  },
+                  bid,
+                ),
+              );
+            } catch (error) {
+              inFlight.delete(id);
+              rej(error);
+            }
+          },
+          (message) => {
+            inFlight.delete(id);
+            void send(
+              addBid(
+                {
+                  id,
+                  type: "request.cancel",
+                  message,
+                },
+                bid,
+              ),
+            ).catch(() => {});
+          },
+        );
+      },
+    });
   };
 
   const onMsg = async (msg: any) => {
@@ -96,54 +260,73 @@ export function getClient<R extends Router>(
         if (call) {
           inFlight.delete(t.id);
           call.rej(t.error);
+          break;
+        }
+
+        let reserveOp = reserveOps.get(t.id);
+        if (reserveOp) {
+          reserveOps.delete(t.id);
+          reserveOp.rej(t.error);
+          break;
+        }
+
+        let releaseOp = releaseOps.get(t.id);
+        if (releaseOp) {
+          releaseOps.delete(t.id);
+          let lease = leases.get(releaseOp.bid);
+          if (lease) {
+            lease.status = "released";
+            leases.delete(releaseOp.bid);
+          }
+          releaseOp.rej(t.error);
         }
         break;
       }
-      case "subscription.start":
-        let gen: AsyncGenerator = {
-          next: () => {
-            return new Promise((res, rej) => {
-              let sub = subs.get(t.id);
-              if (sub) {
-                sub.calls.push({ res, rej, back: 0 });
-                subs.set(t.id, sub);
-                deQueueSub(t.id);
-              } else {
-                res({ value: undefined, done: true });
-              }
-            });
-          },
-          return: async (value) => {
-            await send({
-              id: t.id,
-              type: "subscription.end",
-            });
-            subs.delete(t.id);
-            return { value, done: true };
-          },
-          throw: async (error) => {
-            await send({
-              id: t.id,
-              type: "subscription.error",
-              error,
-            });
-            subs.delete(t.id);
-            return { value: undefined, done: true };
-          },
-          [Symbol.asyncDispose]: async () => {
-            await send({
-              id: t.id,
-              type: "subscription.end",
-            });
-            subs.delete(t.id);
-          },
-          [Symbol.asyncIterator]() {
-            return this;
-          },
-        };
-
+      case "subscription.start": {
         let call = inFlight.get(t.id);
         if (call) {
+          let bid = call.bid;
+          let gen: AsyncGenerator = {
+            next: () => {
+              return new Promise((res, rej) => {
+                let sub = subs.get(t.id);
+                if (sub) {
+                  sub.calls.push({ res, rej, back: 0, bid });
+                  subs.set(t.id, sub);
+                  void deQueueSub(t.id);
+                } else {
+                  res({ value: undefined, done: true });
+                }
+              });
+            },
+            return: async (value) => {
+              await send(addBid({ id: t.id, type: "subscription.end" }, bid));
+              subs.delete(t.id);
+              return { value, done: true };
+            },
+            throw: async (error) => {
+              await send(
+                addBid(
+                  {
+                    id: t.id,
+                    type: "subscription.error",
+                    error,
+                  },
+                  bid,
+                ),
+              );
+              subs.delete(t.id);
+              return { value: undefined, done: true };
+            },
+            [Symbol.asyncDispose]: async () => {
+              await send(addBid({ id: t.id, type: "subscription.end" }, bid));
+              subs.delete(t.id);
+            },
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+          };
+
           let resume = Math.max(1, Math.ceil(call.back / 2));
           subs.set(t.id, {
             calls: [],
@@ -153,21 +336,31 @@ export function getClient<R extends Router>(
             back: call.back,
             resume,
             gen,
+            bid,
           });
           inFlight.delete(t.id);
           call.res(gen);
         }
         break;
+      }
       case "subscription.data": {
         let sub = subs.get(t.id);
         if (sub) {
           sub.data.push({ k: "v", val: t.payload });
-          deQueueSub(t.id);
+          await deQueueSub(t.id);
 
           if (sub.data.length > sub.back && !sub.paused) {
             sub.paused = true;
 
-            await send({ id: t.id, type: "subscription.pause" });
+            await send(
+              addBid(
+                {
+                  id: t.id,
+                  type: "subscription.pause",
+                },
+                sub.bid,
+              ),
+            );
           }
         }
         break;
@@ -176,7 +369,7 @@ export function getClient<R extends Router>(
         let sub = subs.get(t.id);
         if (sub) {
           sub.done = true;
-          deQueueSub(t.id);
+          await deQueueSub(t.id);
         }
         break;
       }
@@ -184,7 +377,7 @@ export function getClient<R extends Router>(
         let sub = subs.get(t.id);
         if (sub) {
           sub.data.push({ k: "e", err: t.error });
-          deQueueSub(t.id);
+          await deQueueSub(t.id);
         }
         break;
       }
@@ -195,9 +388,11 @@ export function getClient<R extends Router>(
           const callbacks = new Set<(value: any) => void>();
           const close = () => {
             eventSubs.delete(t.id);
-            send({ id: t.id, type: "event.end" });
+            void send(addBid({ id: t.id, type: "event.end" }, call.bid)).catch(
+              () => {},
+            );
           };
-          eventSubs.set(t.id, { callbacks });
+          eventSubs.set(t.id, { callbacks, bid: call.bid });
           call.res({
             on: (cb: (value: any) => void) => callbacks.add(cb),
             close,
@@ -212,15 +407,65 @@ export function getClient<R extends Router>(
         }
         break;
       }
+      case "backend.reserved": {
+        let reserveOp = reserveOps.get(t.id);
+        if (reserveOp) {
+          reserveOps.delete(t.id);
+          let lease = leases.get(t.bid);
+          if (!lease) {
+            const newLease: LeaseState<R> = {
+              bid: t.bid,
+              status: "active",
+              handle: undefined as any,
+            };
+            newLease.handle = {
+              bid: t.bid,
+              proxy: getProxy([], t.bid) as any as RouterToProxy<R>,
+              release: () => startLeaseRelease(newLease),
+            };
+            leases.set(t.bid, newLease);
+            lease = newLease;
+          }
+          reserveOp.res(lease.handle);
+        }
+        break;
+      }
+      case "backend.released": {
+        let releaseOp = releaseOps.get(t.id);
+        if (releaseOp) {
+          releaseOps.delete(t.id);
+          let lease = leases.get(releaseOp.bid);
+          if (lease) {
+            lease.status = "released";
+            leases.delete(releaseOp.bid);
+          }
+          releaseOp.res();
+        }
+        break;
+      }
     }
   };
+
   const onClose = () => {
     if (closed) return;
     closed = true;
-    for (let [id, call] of inFlight) {
+
+    for (let [, call] of inFlight) {
       call.rej(new NRPCConnClosed());
     }
     inFlight.clear();
+
+    for (let [, reserveOp] of reserveOps) {
+      reserveOp.rej(new NRPCConnClosed());
+    }
+    reserveOps.clear();
+
+    for (let [, releaseOp] of releaseOps) {
+      releaseOp.rej(new NRPCConnClosed());
+    }
+    releaseOps.clear();
+
+    leases.clear();
 
     let arr = toDrain;
     toDrain = [];
@@ -228,56 +473,31 @@ export function getClient<R extends Router>(
 
     for (let [id, sub] of subs) {
       sub.done = true;
-      deQueueSub(id);
+      void deQueueSub(id);
     }
 
     eventSubs.clear();
   };
 
-  const getProxy = (path: string[]) => {
-    return new Proxy(() => {}, {
-      get(_, p) {
-        if (p === "then") {
-          return undefined;
-        } else if (typeof p === "string") {
-          return getProxy([...path, p]);
-        }
-      },
-      apply: (a, b, args) => {
-        if (closed) {
-          return Promise.reject(new NRPCConnClosed());
-        }
+  const proxy = getProxy([]) as any as RouterToProxy<R>;
 
-        let back = 10;
-        if (typeof args[1] === "number" && args[1] > 0) {
-          back = args[1];
-        }
-        let id = `nrpc_${nextId++}`;
-        return new NRPCPromise(
-          async (res, rej) => {
-            inFlight.set(id, { res, rej, back });
+  const reserveBackend = () => {
+    if (closed) {
+      return Promise.reject(new NRPCConnClosed());
+    }
 
-            await send({
-              id,
-              type: "request",
-              path,
-              input: args[0],
-            });
-          },
-          (message) => {
-            inFlight.delete(id);
-            send({
-              id,
-              type: "request.cancel",
-              message,
-            });
-          },
-        );
-      },
+    const id = nextMessageId();
+    return new Promise<NRPCBackendLease<R>>((res, rej) => {
+      reserveOps.set(id, { res, rej });
+      void send({
+        id,
+        type: "backend.reserve",
+      }).catch((error) => {
+        reserveOps.delete(id);
+        rej(error);
+      });
     });
   };
-
-  const proxy = getProxy([]) as any as RouterToProxy<R>;
 
   const drain = () => {
     paused = false;
@@ -288,5 +508,5 @@ export function getClient<R extends Router>(
     }
   };
 
-  return { onMsg, onClose, proxy, drain, paused: () => paused };
+  return { onMsg, onClose, proxy, reserveBackend, drain, paused: () => paused };
 }

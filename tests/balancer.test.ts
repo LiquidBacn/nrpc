@@ -93,27 +93,21 @@ function createClient<R extends ReturnType<typeof createTestRouter>>(balancer: N
   return { client, balConnection };
 }
 
+function createRawConnection(balancer: NRPCBalancer) {
+  const messages: any[] = [];
+  const connection = balancer.getConnection(
+    async (msg) => {
+      messages.push(msg);
+      return false;
+    },
+    () => {},
+  );
+
+  return { connection, messages };
+}
+
 describe("NRPCBalancer", () => {
-  it("routes requests to first available idle backends", async () => {
-    const processed: number[] = [];
-    const aborts = { value: 0 };
-    const balancer = new NRPCBalancer();
-
-    const serverA = new NRPCServer(createTestRouter(processed, aborts));
-    const serverB = new NRPCServer(createTestRouter(processed, aborts));
-
-    addBackend(balancer, serverA, { name: "A" }, "A");
-    addBackend(balancer, serverB, { name: "B" }, "B");
-
-    const { client } = createClient<typeof serverA.router>(balancer);
-
-    const [first, second] = await Promise.all([client.proxy.who(), client.proxy.who()]);
-
-    expect(first).toBe("A");
-    expect(second).toBe("B");
-  });
-
-  it("queues requests FIFO when all backends are busy", async () => {
+  it("routes pooled requests FIFO when all backends are busy", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -147,7 +141,30 @@ describe("NRPCBalancer", () => {
     expect(processed).toEqual([1, 2]);
   });
 
-  it("supports dedicated lease and release", async () => {
+  it("queues reservations until a backend claims them", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+    const pendingServer = new NRPCServer(createTestRouter(processed, aborts));
+    const { client } = createClient<typeof pendingServer.router>(balancer);
+
+    let resolved = false;
+    const leasePromise = client.reserveBackend().then((lease) => {
+      resolved = true;
+      return lease;
+    });
+
+    await sleep(20);
+    expect(resolved).toBe(false);
+
+    addBackend(balancer, pendingServer, { name: "A" }, "A");
+
+    const lease = await leasePromise;
+    expect(lease.bid).toBe("A");
+    await expect(lease.proxy.who()).resolves.toBe("A");
+  });
+
+  it("supports multiple simultaneous reservations on one connection", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -158,25 +175,19 @@ describe("NRPCBalancer", () => {
     addBackend(balancer, serverA, { name: "A" }, "A");
     addBackend(balancer, serverB, { name: "B" }, "B");
 
-    const c1 = createClient<typeof serverA.router>(balancer);
-    const c2 = createClient<typeof serverA.router>(balancer);
+    const { client } = createClient<typeof serverA.router>(balancer);
 
-    const lease = c1.balConnection.acquireDedicated();
-    expect(lease).toBe("A");
+    const [leaseA, leaseB] = await Promise.all([
+      client.reserveBackend(),
+      client.reserveBackend(),
+    ]);
 
-    const fromLeased = await c1.client.proxy.who();
-    const fromPool = await c2.client.proxy.who();
-
-    expect(fromLeased).toBe("A");
-    expect(fromPool).toBe("B");
-
-    c1.balConnection.releaseDedicated();
-
-    const afterRelease = await c2.client.proxy.who();
-    expect(afterRelease).toBe("A");
+    expect(new Set([leaseA.bid, leaseB.bid])).toEqual(new Set(["A", "B"]));
+    await expect(leaseA.proxy.who()).resolves.toBe(leaseA.bid);
+    await expect(leaseB.proxy.who()).resolves.toBe(leaseB.bid);
   });
 
-  it("auto-releases dedicated lease on frontend connection close", async () => {
+  it("routes leased requests by bid and rejects foreign bids", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -187,17 +198,90 @@ describe("NRPCBalancer", () => {
     addBackend(balancer, serverA, { name: "A" }, "A");
     addBackend(balancer, serverB, { name: "B" }, "B");
 
-    const c1 = createClient<typeof serverA.router>(balancer);
-    const c2 = createClient<typeof serverA.router>(balancer);
+    const owner = createClient<typeof serverA.router>(balancer);
+    const foreign = createRawConnection(balancer);
 
-    c1.balConnection.acquireDedicated();
-    c1.balConnection.onClose();
+    const lease = await owner.client.reserveBackend();
+    await expect(lease.proxy.who()).resolves.toBe(lease.bid);
 
-    const picked = await c2.client.proxy.who();
-    expect(picked).toBe("A");
+    await foreign.connection.onMsg({
+      id: "raw_1",
+      type: "request",
+      path: ["who"],
+      input: undefined,
+      bid: lease.bid,
+    });
+
+    await sleep(10);
+    expect(foreign.messages).toHaveLength(1);
+    expect(foreign.messages[0]).toMatchObject({
+      id: "raw_1",
+      type: "error",
+    });
+    expect(foreign.messages[0].error.message).toBe(
+      "Dedicated backend unavailable.",
+    );
   });
 
-  it("forwards request.cancel and frees backend", async () => {
+  it("orders lease release behind queued leased work", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const lease = await client.reserveBackend();
+
+    const sub = await lease.proxy.holdSub();
+    await sub.next();
+
+    const work = lease.proxy.work(1);
+    let released = false;
+    const releasing = lease.release().then(() => {
+      released = true;
+    });
+
+    await expect(lease.proxy.who()).rejects.toMatchObject({
+      message: "Backend lease released.",
+    });
+    await sleep(20);
+    expect(released).toBe(false);
+
+    await sub.return(undefined);
+
+    await expect(work).resolves.toBe("A:1");
+    await releasing;
+    expect(released).toBe(true);
+  });
+
+  it("releases active reservations when the frontend connection closes", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const owner = createClient<typeof serverA.router>(balancer);
+    const other = createClient<typeof serverA.router>(balancer);
+
+    await owner.client.reserveBackend();
+    owner.balConnection.onClose();
+
+    const [leaseA, leaseB] = await Promise.all([
+      other.client.reserveBackend(),
+      other.client.reserveBackend(),
+    ]);
+
+    expect(new Set([leaseA.bid, leaseB.bid])).toEqual(new Set(["A", "B"]));
+  });
+
+  it("forwards request.cancel and frees a pooled backend", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -217,25 +301,7 @@ describe("NRPCBalancer", () => {
     expect(who).toBe("A");
   });
 
-  it("fails active subscription when backend closes", async () => {
-    const processed: number[] = [];
-    const aborts = { value: 0 };
-    const balancer = new NRPCBalancer();
-
-    const serverA = new NRPCServer(createTestRouter(processed, aborts));
-    const { backendHandle } = addBackend(balancer, serverA, { name: "A" }, "A");
-
-    const { client } = createClient<typeof serverA.router>(balancer);
-
-    const sub = await client.proxy.holdSub();
-    await sub.next();
-
-    backendHandle.onClose(new Error("boom"));
-
-    await expect(sub.next()).rejects.toMatchObject({ message: "boom" });
-  });
-
-  it("invalidates dedicated lease when leased backend dies", async () => {
+  it("fails active subscriptions and queued leased work when a reserved backend closes", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -246,16 +312,22 @@ describe("NRPCBalancer", () => {
     const a = addBackend(balancer, serverA, { name: "A" }, "A");
     addBackend(balancer, serverB, { name: "B" }, "B");
 
-    const c1 = createClient<typeof serverA.router>(balancer);
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const lease = await client.reserveBackend();
 
-    c1.balConnection.acquireDedicated();
-    a.backendHandle.onClose(new Error("dedicated down"));
+    const sub = await lease.proxy.holdSub();
+    await sub.next();
 
-    await expect(c1.client.proxy.who()).rejects.toMatchObject({
+    const queued = lease.proxy.work(7);
+
+    a.backendHandle.onClose(new Error("boom"));
+
+    await expect(sub.next()).rejects.toMatchObject({ message: "boom" });
+    await expect(queued).rejects.toMatchObject({
       message: "Dedicated backend unavailable.",
     });
 
-    const next = await c1.client.proxy.who();
-    expect(next).toBe("B");
+    const pooled = await client.proxy.who();
+    expect(pooled).toBe("B");
   });
 });
