@@ -11,12 +11,6 @@ export default defineConfig({
         "balancer/index": "./src/balancer/index.ts",
       },
     },
-    rollupOptions: {
-      // input: {
-      //   server: "./src/server/index.ts",
-      //   client: "./src/client/index.ts",
-      // },
-    },
     sourcemap: true,
     emptyOutDir: true,
   },

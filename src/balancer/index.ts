@@ -10,7 +10,10 @@ export { Queue, QueueClear };
 type ActiveKind = "pending" | "subscription" | "event";
 
 type RequestMessage = Extract<NRPCRequest, { type: "request" }>;
-type BroadcastRequestMessage = Extract<NRPCRequest, { type: "request.broadcast" }>;
+type BroadcastRequestMessage = Extract<
+  NRPCRequest,
+  { type: "request.broadcast" }
+>;
 
 type ActiveNormalRequest = {
   source: "request";
@@ -792,7 +795,10 @@ export class NRPCBalancer {
         },
         false,
       );
-    } else if (msg.type === "subscription.end" || msg.type === "subscription.error") {
+    } else if (
+      msg.type === "subscription.end" ||
+      msg.type === "subscription.error"
+    ) {
       if (!child.settled) {
         await this.#settleBroadcastChild(
           active.requestId,
@@ -1071,12 +1077,14 @@ export class NRPCBalancer {
   #hasBackendWork(backend: BackendState) {
     return (
       backend.broadcast.size() > 0 ||
-      (backend.lease ? backend.lease.queue.size() > 0 : this.#incoming.size() > 0)
+      (backend.lease ?
+        backend.lease.queue.size() > 0
+      : this.#incoming.size() > 0)
     );
   }
 
   #notifyBackendReady(backend: BackendState) {
-    while (backend.readyWaiters.length) {
+    if (backend.readyWaiters.length && !backend.busy) {
       const waiter = backend.readyWaiters.shift()!;
       waiter();
     }
