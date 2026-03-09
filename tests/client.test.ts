@@ -1,5 +1,25 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import { getClient } from "../src/client/index.ts";
+import {
+  event,
+  query,
+  router,
+  subscription,
+  type BroadcastResult,
+  type NRPCPromise,
+} from "../src/shared/index.ts";
+
+const typedRouter = router(() => ({}), {
+  admin: router(() => ({}), {
+    users: router(() => ({}), {
+      getAll: query((_ctx: {}, _signal: AbortSignal) => ["user"]),
+      stream: subscription(async function* () {
+        yield "user";
+      }),
+      changed: event<string>(),
+    }),
+  }),
+});
 
 describe("getClient()", () => {
   describe("message handling", () => {
@@ -11,6 +31,7 @@ describe("getClient()", () => {
       expect(client).toHaveProperty("onMsg");
       expect(client).toHaveProperty("onClose");
       expect(client).toHaveProperty("proxy");
+      expect(client).toHaveProperty("broadcast");
       expect(typeof client.onMsg).toBe("function");
       expect(typeof client.onClose).toBe("function");
     });
@@ -334,6 +355,39 @@ describe("getClient()", () => {
       expect(capturedMsg.path).toEqual(["admin", "users", "getAll"]);
     });
 
+    it("builds nested broadcast paths for nested routes", () => {
+      let capturedMsg: any;
+      const client = getClient(
+        (msg) => {
+          capturedMsg = msg;
+        },
+        () => {},
+      );
+
+      (client.broadcast as any).admin.users.getAll();
+
+      expect(capturedMsg.type).toBe("request.broadcast");
+      expect(capturedMsg.path).toEqual(["admin", "users", "getAll"]);
+    });
+
+    it("sends request.broadcast for broadcast calls", () => {
+      let capturedMsg: any;
+      const client = getClient(
+        (msg) => {
+          capturedMsg = msg;
+        },
+        () => {},
+      );
+
+      (client.broadcast as any).myMethod("arg");
+
+      expect(capturedMsg).toMatchObject({
+        type: "request.broadcast",
+        path: ["myMethod"],
+        input: "arg",
+      });
+    });
+
     it("includes undefined for requests without input", () => {
       let capturedMsg: any;
       const client = getClient(
@@ -381,6 +435,15 @@ describe("getClient()", () => {
         () => {},
       );
       const proxy = (client.proxy as any).method;
+      expect(proxy.then).toBeUndefined();
+    });
+
+    it("broadcast proxy does not return promise for .then access", () => {
+      const client = getClient(
+        () => {},
+        () => {},
+      );
+      const proxy = (client.broadcast as any).method;
       expect(proxy.then).toBeUndefined();
     });
 
@@ -467,6 +530,45 @@ describe("getClient()", () => {
 
       const errorMsg = messages.find((m) => m.type === "subscription.error");
       expect(errorMsg).toBeDefined();
+    });
+
+    it("sends request.cancel when a broadcast promise is canceled", async () => {
+      const messages: any[] = [];
+      const client = getClient(
+        (msg) => {
+          messages.push(msg);
+        },
+        () => {},
+      );
+
+      const promise = (client.broadcast as any).testQuery();
+      promise.cancel("stop");
+
+      await expect(promise).rejects.toBeDefined();
+      expect(messages[0].type).toBe("request.broadcast");
+      expect(messages[1]).toMatchObject({
+        id: messages[0].id,
+        type: "request.cancel",
+        message: "stop",
+      });
+    });
+  });
+
+  describe("broadcast typing", () => {
+    it("exposes query leaves and rejects subscription or event leaves", () => {
+      const client = getClient<typeof typedRouter>(
+        () => {},
+        () => {},
+      );
+
+      expectTypeOf(client.broadcast.admin.users.getAll).toEqualTypeOf<
+        (inp: void) => NRPCPromise<BroadcastResult<string[]>[]>
+      >();
+
+      // @ts-expect-error broadcast excludes subscriptions
+      client.broadcast.admin.users.stream();
+      // @ts-expect-error broadcast excludes events
+      client.broadcast.admin.users.changed();
     });
   });
 
