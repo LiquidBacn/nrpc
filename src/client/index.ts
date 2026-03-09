@@ -1,5 +1,6 @@
 import { NRPCConnClosed, NRPCPromise } from "../shared/index.ts";
 import type {
+  BroadcastRouterToProxy,
   NRPCRequest,
   NRPCResponse,
   Router,
@@ -51,6 +52,11 @@ export type NRPCBackendLease<R extends Router> = {
   bid: string;
   proxy: RouterToProxy<R>;
   release: () => Promise<void>;
+};
+
+type ProxyMode = {
+  bid?: string;
+  requestType: "request" | "request.broadcast";
 };
 
 export function getClient<R extends Router>(
@@ -173,13 +179,13 @@ export function getClient<R extends Router>(
     return lease.releasePromise;
   };
 
-  const getProxy = (path: string[], bid?: string) => {
+  const getProxy = (path: string[], mode: ProxyMode) => {
     return new Proxy(() => {}, {
       get(_, p) {
         if (p === "then") {
           return undefined;
         } else if (typeof p === "string") {
-          return getProxy([...path, p], bid);
+          return getProxy([...path, p], mode);
         }
       },
       apply: (_, __, args) => {
@@ -188,7 +194,7 @@ export function getClient<R extends Router>(
         }
 
         try {
-          assertLeaseActive(bid);
+          assertLeaseActive(mode.bid);
         } catch (error) {
           return Promise.reject(error);
         }
@@ -201,20 +207,29 @@ export function getClient<R extends Router>(
         let id = nextMessageId();
         return new NRPCPromise(
           async (res, rej) => {
-            inFlight.set(id, { res, rej, back, bid });
+            inFlight.set(id, { res, rej, back, bid: mode.bid });
 
             try {
-              await send(
-                addBid(
-                  {
-                    id,
-                    type: "request",
-                    path,
-                    input: args[0],
-                  },
-                  bid,
-                ),
-              );
+              if (mode.requestType === "request") {
+                await send(
+                  addBid(
+                    {
+                      id,
+                      type: "request",
+                      path,
+                      input: args[0],
+                    },
+                    mode.bid,
+                  ),
+                );
+              } else {
+                await send({
+                  id,
+                  type: "request.broadcast",
+                  path,
+                  input: args[0],
+                });
+              }
             } catch (error) {
               inFlight.delete(id);
               rej(error);
@@ -229,7 +244,7 @@ export function getClient<R extends Router>(
                   type: "request.cancel",
                   message,
                 },
-                bid,
+                mode.bid,
               ),
             ).catch(() => {});
           },
@@ -420,7 +435,10 @@ export function getClient<R extends Router>(
             };
             newLease.handle = {
               bid: t.bid,
-              proxy: getProxy([], t.bid) as any as RouterToProxy<R>,
+              proxy: getProxy([], {
+                bid: t.bid,
+                requestType: "request",
+              }) as any as RouterToProxy<R>,
               release: () => startLeaseRelease(newLease),
             };
             leases.set(t.bid, newLease);
@@ -479,7 +497,12 @@ export function getClient<R extends Router>(
     eventSubs.clear();
   };
 
-  const proxy = getProxy([]) as any as RouterToProxy<R>;
+  const proxy = getProxy([], {
+    requestType: "request",
+  }) as any as RouterToProxy<R>;
+  const broadcast = getProxy([], {
+    requestType: "request.broadcast",
+  }) as any as BroadcastRouterToProxy<R>;
 
   const reserveBackend = () => {
     if (closed) {
@@ -508,5 +531,13 @@ export function getClient<R extends Router>(
     }
   };
 
-  return { onMsg, onClose, proxy, reserveBackend, drain, paused: () => paused };
+  return {
+    onMsg,
+    onClose,
+    proxy,
+    broadcast,
+    reserveBackend,
+    drain,
+    paused: () => paused,
+  };
 }

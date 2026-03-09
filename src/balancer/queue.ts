@@ -16,6 +16,12 @@ export class Queue<T> {
     this.dequeue();
   }
 
+  tryRead(): T | undefined {
+    if (this.data.length) {
+      return this.data.shift();
+    }
+  }
+
   read(signal?: AbortSignal): Promise<T> {
     return new Promise<T>((res, rej) => {
       const item = { res, rej, signal } as (typeof this.cbs)[number];

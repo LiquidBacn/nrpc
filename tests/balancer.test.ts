@@ -11,6 +11,19 @@ type BackendContext = { name: string };
 function createTestRouter(processed: number[], aborts: { value: number }) {
   return router((ctx: BackendContext) => ctx, {
     who: query((ctx: BackendContext) => ctx.name),
+    maybeFail: query((ctx: BackendContext) => {
+      if (ctx.name === "B") {
+        throw new Error("backend B failed");
+      }
+      return ctx.name;
+    }),
+    delayedWho: query(
+      (input) => Number(input),
+      async (ctx: BackendContext, ms: number) => {
+        await sleep(ctx.name === "A" ? ms * 2 : ms);
+        return ctx.name;
+      },
+    ),
     work: query(
       (input) => Number(input),
       async (ctx: BackendContext, n: number) => {
@@ -329,5 +342,273 @@ describe("NRPCBalancer", () => {
 
     const pooled = await client.proxy.who();
     expect(pooled).toBe("B");
+  });
+
+  it("broadcast query hits every live backend and returns ordered per-backend entries", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const result = await client.broadcast.who();
+
+    expect(result).toEqual([
+      { backendId: "A", type: "result", value: "A" },
+      { backendId: "B", type: "result", value: "B" },
+    ]);
+  });
+
+  it("broadcast includes a backend leased by another connection", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const owner = createClient<typeof serverA.router>(balancer);
+    const other = createClient<typeof serverA.router>(balancer);
+
+    const lease = await owner.client.reserveBackend();
+    expect(["A", "B"]).toContain(lease.bid);
+
+    const result = await other.client.broadcast.who();
+    expect(result).toEqual([
+      { backendId: "A", type: "result", value: "A" },
+      { backendId: "B", type: "result", value: "B" },
+    ]);
+  });
+
+  it("broadcast with zero live backends resolves to an empty array", async () => {
+    const balancer = new NRPCBalancer();
+    const { client } = createClient<any>(balancer);
+
+    await expect((client.broadcast as any).who()).resolves.toEqual([]);
+  });
+
+  it("broadcast result ordering matches backend iteration order, not completion order", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const result = await client.broadcast.delayedWho(10);
+
+    expect(result.map((entry) => entry.backendId)).toEqual(["A", "B"]);
+    expect(result).toEqual([
+      { backendId: "A", type: "result", value: "A" },
+      { backendId: "B", type: "result", value: "B" },
+    ]);
+  });
+
+  it("broadcast is queued ahead of already-queued pooled work", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const sub = await client.proxy.holdSub();
+    await sub.next();
+
+    const order: string[] = [];
+    const queued = client.proxy.work(1).then((value) => {
+      order.push("work");
+      return value;
+    });
+    const broadcast = client.broadcast.who().then((value) => {
+      order.push("broadcast");
+      return value;
+    });
+
+    await sleep(20);
+    expect(order).toEqual([]);
+
+    await sub.return(undefined);
+
+    await expect(broadcast).resolves.toEqual([
+      { backendId: "A", type: "result", value: "A" },
+    ]);
+    await expect(queued).resolves.toBe("A:1");
+    expect(order[0]).toBe("broadcast");
+  });
+
+  it("broadcast is queued ahead of already-queued lease work on a leased backend", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const owner = createClient<typeof serverA.router>(balancer);
+    const other = createClient<typeof serverA.router>(balancer);
+
+    const lease = await owner.client.reserveBackend();
+    const sub = await lease.proxy.holdSub();
+    await sub.next();
+
+    const order: string[] = [];
+    const queued = lease.proxy.work(1).then((value) => {
+      order.push("work");
+      return value;
+    });
+    const broadcast = other.client.broadcast.who().then((value) => {
+      order.push("broadcast");
+      return value;
+    });
+
+    await sleep(20);
+    expect(order).toEqual([]);
+
+    await sub.return(undefined);
+
+    await expect(broadcast).resolves.toEqual([
+      { backendId: "A", type: "result", value: "A" },
+    ]);
+    await expect(queued).resolves.toBe("A:1");
+    expect(order[0]).toBe("broadcast");
+  });
+
+  it("backend close during broadcast yields an error entry for that backend and result entries for the others", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    const a = addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const resultPromise = client.broadcast.delayedWho(30);
+
+    await sleep(5);
+    a.backendHandle.onClose(new Error("boom"));
+
+    const result = await resultPromise;
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({
+      backendId: "A",
+      type: "error",
+    });
+    expect((result[0] as any).error.message).toBe("boom");
+    expect(result[1]).toEqual({
+      backendId: "B",
+      type: "result",
+      value: "B",
+    });
+  });
+
+  it("canceling a broadcast cancels unfinished children", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const req = client.broadcast.cancelable();
+    await sleep(10);
+    req.cancel("stop");
+
+    await expect(req).rejects.toBeDefined();
+    await sleep(30);
+    expect(aborts.value).toBe(2);
+  });
+
+  it("bypassing types to broadcast a subscription or event path yields per-backend error entries", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const raw = createRawConnection(balancer);
+
+    await raw.connection.onMsg({
+      id: "sub_broadcast",
+      type: "request.broadcast",
+      path: ["holdSub"],
+      input: undefined,
+    });
+    await raw.connection.onMsg({
+      id: "event_broadcast",
+      type: "request.broadcast",
+      path: ["ping"],
+      input: undefined,
+    });
+
+    await sleep(20);
+
+    expect(raw.messages).toHaveLength(2);
+    expect(raw.messages[0]).toMatchObject({
+      id: "sub_broadcast",
+      type: "result",
+    });
+    expect(raw.messages[1]).toMatchObject({
+      id: "event_broadcast",
+      type: "result",
+    });
+    for (const message of raw.messages) {
+      expect(message.payload).toHaveLength(2);
+      for (const entry of message.payload) {
+        expect(entry.type).toBe("error");
+        expect(entry.error.message).toBe("Broadcast only supports query routes.");
+      }
+    }
+  });
+
+  it("integration: mixed broadcast result contains result and error entries", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const result = await client.broadcast.maybeFail();
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      backendId: "A",
+      type: "result",
+      value: "A",
+    });
+    expect(result[1]).toMatchObject({
+      backendId: "B",
+      type: "error",
+    });
+    expect((result[1] as any).error.message).toBe("backend B failed");
   });
 });

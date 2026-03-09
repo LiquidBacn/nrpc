@@ -1,5 +1,11 @@
 export { event, query, router, subscription } from "./builders.ts";
-export type { EventsToProxy, NRPCRequest, NRPCResponse } from "./types.ts";
+export type {
+  BroadcastResult,
+  BroadcastRouterToProxy,
+  EventsToProxy,
+  NRPCRequest,
+  NRPCResponse,
+} from "./types.ts";
 
 export class NRPCConnClosed extends Error {
   name = "NRPCConnClosed";
