@@ -164,16 +164,51 @@ export function getClient<R extends Router>(
         },
       });
 
-      void send({
-        id,
-        type: "backend.release",
-        bid: lease.bid,
-      }).catch((error) => {
-        releaseOps.delete(id);
-        lease.status = "released";
-        leases.delete(lease.bid);
-        rej(error);
-      });
+      void (async () => {
+        try {
+          const releaseError = new Error("Backend lease released.");
+
+          for (const [subId, sub] of subs) {
+            if (sub.bid !== lease.bid) {
+              continue;
+            }
+
+            sub.done = true;
+            sub.data.push({ k: "e", err: releaseError });
+            void deQueueSub(subId);
+            await send(
+              addBid(
+                {
+                  id: subId,
+                  type: "subscription.error",
+                  error: releaseError,
+                },
+                lease.bid,
+              ),
+            );
+          }
+
+          for (const [eventId, eventSub] of eventSubs) {
+            if (eventSub.bid !== lease.bid) {
+              continue;
+            }
+
+            eventSubs.delete(eventId);
+            await send(addBid({ id: eventId, type: "event.end" }, lease.bid));
+          }
+
+          await send({
+            id,
+            type: "backend.release",
+            bid: lease.bid,
+          });
+        } catch (error) {
+          releaseOps.delete(id);
+          lease.status = "released";
+          leases.delete(lease.bid);
+          rej(error);
+        }
+      })();
     });
 
     return lease.releasePromise;

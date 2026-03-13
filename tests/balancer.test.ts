@@ -80,7 +80,9 @@ function addBackend(
   return { connection, backendHandle };
 }
 
-function createClient<R extends ReturnType<typeof createTestRouter>>(balancer: NRPCBalancer) {
+function createClient<R extends ReturnType<typeof createTestRouter>>(
+  balancer: NRPCBalancer,
+) {
   let balConnection: ReturnType<NRPCBalancer["getConnection"]>;
 
   const client = getClient<R>(
@@ -236,7 +238,7 @@ describe("NRPCBalancer", () => {
     );
   });
 
-  it("waits to release a lease until active leased subscriptions end", async () => {
+  it("errors leased subscriptions when the lease is released", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -250,26 +252,61 @@ describe("NRPCBalancer", () => {
     const sub = await lease.proxy.holdSub();
     await sub.next();
 
-    const work = Promise.race([
-      lease.proxy.work(1),
+    const releasing = Promise.race([
+      lease.release(),
       sleep(50).then(() => "__timeout__"),
     ]);
-    let released = false;
-    const releasing = lease.release().then(() => {
-      released = true;
-    });
 
     await expect(lease.proxy.who()).rejects.toMatchObject({
       message: "Backend lease released.",
     });
-    await expect(work).resolves.toBe("A:1");
-    await sleep(20);
-    expect(released).toBe(false);
+    await expect(sub.next()).rejects.toMatchObject({
+      message: "Backend lease released.",
+    });
+    await expect(releasing).resolves.toBeUndefined();
+  });
 
-    await sub.return(undefined);
+  it("resolves lease release when the lease is idle", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
 
-    await releasing;
-    expect(released).toBe(true);
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const lease = await client.reserveBackend();
+
+    await expect(
+      Promise.race([lease.release(), sleep(50).then(() => "__timeout__")]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("silently closes leased event listeners when the lease is released", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const lease = await client.reserveBackend();
+    const eventSub = await lease.proxy.ping();
+    const received: string[] = [];
+
+    eventSub.on((value) => {
+      received.push(value);
+    });
+
+    await expect(
+      Promise.race([lease.release(), sleep(50).then(() => "__timeout__")]),
+    ).resolves.toBeUndefined();
+
+    serverA.events.ping("hello");
+    await sleep(10);
+
+    expect(received).toEqual([]);
   });
 
   it("releases active reservations when the frontend connection closes", async () => {
@@ -624,7 +661,9 @@ describe("NRPCBalancer", () => {
       expect(message.payload).toHaveLength(2);
       for (const entry of message.payload) {
         expect(entry.type).toBe("error");
-        expect(entry.error.message).toBe("Broadcast only supports query routes.");
+        expect(entry.error.message).toBe(
+          "Broadcast only supports query routes.",
+        );
       }
     }
   });
