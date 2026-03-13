@@ -542,13 +542,13 @@ export class NRPCBalancer {
         return;
       }
 
-      this.#activateRequest(connection, backend, item.request);
+      this.#activateLeasedRequest(connection, backend, item.request);
       pending.assigned = true;
       connection.pendingQueuedRequests.delete(item.requestId);
       lease.queuedRequestIds.delete(item.requestId);
-      await this.#sendToBackend(backend, item.request);
+      void this.#sendToBackend(backend, item.request).catch(() => {});
     } else if (item.bid === backend.id) {
-      await this.#finalizeLease(backend, lease, item.releaseRequestId);
+      await this.#maybeFinalizeClosingLease(backend);
     }
   }
 
@@ -612,6 +612,18 @@ export class NRPCBalancer {
     });
   }
 
+  #activateLeasedRequest(
+    connection: FrontendState,
+    backend: BackendState,
+    request: RequestMessage,
+  ) {
+    connection.inFlight.set(request.id, {
+      backendId: backend.id,
+      kind: "pending",
+      bid: request.bid,
+    });
+  }
+
   #activateBroadcastRequest(
     connection: FrontendState,
     backend: BackendState,
@@ -630,52 +642,91 @@ export class NRPCBalancer {
   async #onBackendMessage(backend: BackendState, msg: any) {
     if (!backend.alive || backend.closed) return;
     if (msg === null || typeof msg !== "object") return;
-    if (!backend.active) return;
 
     const t = msg as NRPCResponse;
-    if (t.id !== backend.active.requestId) {
+    if (backend.active?.requestId === t.id) {
+      if (backend.active.source === "request") {
+        const connection = this.#connections.get(backend.active.connectionId);
+        if (!connection || connection.closed) {
+          this.#completeRequest(
+            backend.active.connectionId,
+            backend.active.requestId,
+            backend.id,
+          );
+          return;
+        }
+
+        if (t.type === "subscription.start") {
+          backend.active.kind = "subscription";
+          const inFlight = connection.inFlight.get(t.id);
+          if (inFlight) {
+            inFlight.kind = "subscription";
+          }
+          await this.#sendToConnection(connection, t);
+        } else if (t.type === "event.start") {
+          backend.active.kind = "event";
+          const inFlight = connection.inFlight.get(t.id);
+          if (inFlight) {
+            inFlight.kind = "event";
+          }
+          await this.#sendToConnection(connection, t);
+        } else {
+          await this.#sendToConnection(connection, t);
+
+          if (
+            t.type === "result" ||
+            t.type === "error" ||
+            t.type === "subscription.end" ||
+            t.type === "subscription.error"
+          ) {
+            this.#completeRequest(connection.id, t.id, backend.id);
+          }
+        }
+      } else {
+        await this.#handleBroadcastBackendMessage(backend, t);
+      }
       return;
     }
 
-    if (backend.active.source === "request") {
-      const connection = this.#connections.get(backend.active.connectionId);
-      if (!connection || connection.closed) {
-        this.#completeRequest(
-          backend.active.connectionId,
-          backend.active.requestId,
-          backend.id,
-        );
-        return;
-      }
+    await this.#handleLeasedBackendMessage(backend, t);
+  }
 
-      if (t.type === "subscription.start") {
-        backend.active.kind = "subscription";
-        const inFlight = connection.inFlight.get(t.id);
-        if (inFlight) {
-          inFlight.kind = "subscription";
-        }
-        await this.#sendToConnection(connection, t);
-      } else if (t.type === "event.start") {
-        backend.active.kind = "event";
-        const inFlight = connection.inFlight.get(t.id);
-        if (inFlight) {
-          inFlight.kind = "event";
-        }
-        await this.#sendToConnection(connection, t);
-      } else {
-        await this.#sendToConnection(connection, t);
+  async #handleLeasedBackendMessage(
+    backend: BackendState,
+    msg: NRPCResponse,
+  ) {
+    const lease = backend.lease;
+    if (!lease || lease.backendId !== backend.id) {
+      return;
+    }
 
-        if (
-          t.type === "result" ||
-          t.type === "error" ||
-          t.type === "subscription.end" ||
-          t.type === "subscription.error"
-        ) {
-          this.#completeRequest(connection.id, t.id, backend.id);
-        }
-      }
+    const connection = this.#connections.get(lease.connectionId);
+    if (!connection || connection.closed) {
+      return;
+    }
+
+    const inFlight = connection.inFlight.get(msg.id);
+    if (!inFlight || inFlight.backendId !== backend.id) {
+      return;
+    }
+
+    if (msg.type === "subscription.start") {
+      inFlight.kind = "subscription";
+      await this.#sendToConnection(connection, msg);
+    } else if (msg.type === "event.start") {
+      inFlight.kind = "event";
+      await this.#sendToConnection(connection, msg);
     } else {
-      await this.#handleBroadcastBackendMessage(backend, t);
+      await this.#sendToConnection(connection, msg);
+
+      if (
+        msg.type === "result" ||
+        msg.type === "error" ||
+        msg.type === "subscription.end" ||
+        msg.type === "subscription.error"
+      ) {
+        this.#completeRequest(connection.id, msg.id, backend.id);
+      }
     }
   }
 
@@ -1006,6 +1057,9 @@ export class NRPCBalancer {
   #completeBackendActivity(backend: BackendState) {
     backend.active = undefined;
     backend.busy = false;
+    if (backend.lease?.status === "closing") {
+      void this.#maybeFinalizeClosingLease(backend).catch(() => {});
+    }
     this.#notifyBackendReady(backend);
   }
 
@@ -1020,7 +1074,44 @@ export class NRPCBalancer {
       backend.active.requestId === requestId
     ) {
       this.#completeBackendActivity(backend);
+    } else if (backend?.lease?.status === "closing") {
+      void this.#maybeFinalizeClosingLease(backend).catch(() => {});
     }
+  }
+
+  async #maybeFinalizeClosingLease(backend: BackendState) {
+    const lease = backend.lease;
+    if (
+      !lease ||
+      lease.status !== "closing" ||
+      backend.busy ||
+      backend.broadcast.size() > 0 ||
+      this.#hasLeasedInFlightRequests(backend, lease) ||
+      lease.queue.size() > 0
+    ) {
+      return;
+    }
+
+    await this.#finalizeLease(
+      backend,
+      lease,
+      lease.pendingReleaseRequestId,
+    );
+  }
+
+  #hasLeasedInFlightRequests(backend: BackendState, lease: LeaseState) {
+    const connection = this.#connections.get(lease.connectionId);
+    if (!connection || connection.closed) {
+      return false;
+    }
+
+    for (const request of connection.inFlight.values()) {
+      if (request.backendId === backend.id) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async #finalizeLease(
@@ -1320,6 +1411,7 @@ export class NRPCBalancer {
     backend.closed = true;
     backend.alive = false;
     backend.workerAbort.abort(new Error(`Backend "${backend.id}" closed.`));
+    const backendError = error ?? new Error(`Backend "${backend.id}" closed.`);
 
     const inflight = backend.active;
     if (inflight?.source === "request") {
@@ -1329,13 +1421,13 @@ export class NRPCBalancer {
           void this.#sendToConnection(connection, {
             id: inflight.requestId,
             type: "subscription.error",
-            error: error ?? new Error(`Backend "${backend.id}" closed.`),
+            error: backendError,
           });
         } else {
           void this.#sendToConnection(connection, {
             id: inflight.requestId,
             type: "error",
-            error: error ?? new Error(`Backend "${backend.id}" closed.`),
+            error: backendError,
           });
         }
       }
@@ -1350,6 +1442,31 @@ export class NRPCBalancer {
       this.#completeBackendActivity(backend);
     } else {
       this.#failBroadcastChildrenForBackend(backend, error);
+    }
+
+    if (backend.lease) {
+      const connection = this.#connections.get(backend.lease.connectionId);
+      const leasedInFlight = [...(connection?.inFlight.entries() ?? [])].filter(
+        ([, request]) => request.backendId === backend.id,
+      );
+      for (const [requestId, request] of leasedInFlight) {
+        if (connection && !connection.closed) {
+          if (request.kind === "subscription") {
+            void this.#sendToConnection(connection, {
+              id: requestId,
+              type: "subscription.error",
+              error: backendError,
+            });
+          } else {
+            void this.#sendToConnection(connection, {
+              id: requestId,
+              type: "error",
+              error: backendError,
+            });
+          }
+        }
+        connection?.inFlight.delete(requestId);
+      }
     }
 
     if (backend.lease) {
