@@ -236,7 +236,7 @@ describe("NRPCBalancer", () => {
     );
   });
 
-  it("orders lease release behind queued leased work", async () => {
+  it("waits to release a lease until active leased subscriptions end", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -250,7 +250,10 @@ describe("NRPCBalancer", () => {
     const sub = await lease.proxy.holdSub();
     await sub.next();
 
-    const work = lease.proxy.work(1);
+    const work = Promise.race([
+      lease.proxy.work(1),
+      sleep(50).then(() => "__timeout__"),
+    ]);
     let released = false;
     const releasing = lease.release().then(() => {
       released = true;
@@ -259,12 +262,12 @@ describe("NRPCBalancer", () => {
     await expect(lease.proxy.who()).rejects.toMatchObject({
       message: "Backend lease released.",
     });
+    await expect(work).resolves.toBe("A:1");
     await sleep(20);
     expect(released).toBe(false);
 
     await sub.return(undefined);
 
-    await expect(work).resolves.toBe("A:1");
     await releasing;
     expect(released).toBe(true);
   });
@@ -314,7 +317,7 @@ describe("NRPCBalancer", () => {
     expect(who).toBe("A");
   });
 
-  it("fails active subscriptions and queued leased work when a reserved backend closes", async () => {
+  it("fails active leased subscriptions and in-flight leased work when a reserved backend closes", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -332,16 +335,72 @@ describe("NRPCBalancer", () => {
     await sub.next();
 
     const queued = lease.proxy.work(7);
+    while (!processed.includes(7)) {
+      await sleep(1);
+    }
 
     a.backendHandle.onClose(new Error("boom"));
 
     await expect(sub.next()).rejects.toMatchObject({ message: "boom" });
     await expect(queued).rejects.toMatchObject({
-      message: "Dedicated backend unavailable.",
+      message: "boom",
     });
 
     const pooled = await client.proxy.who();
     expect(pooled).toBe("B");
+  });
+
+  it("allows leased requests while a leased subscription is active", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const lease = await client.reserveBackend();
+    const sub = await lease.proxy.holdSub();
+    await sub.next();
+
+    const requestResult = await Promise.race([
+      lease.proxy.who(),
+      sleep(50).then(() => "__timeout__"),
+    ]);
+    expect(requestResult).toBe("A");
+
+    await sub.return(undefined);
+  });
+
+  it("allows leased requests while a leased event listener is active", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    addBackend(balancer, serverA, { name: "A" }, "A");
+
+    const { client } = createClient<typeof serverA.router>(balancer);
+    const lease = await client.reserveBackend();
+    const eventSub = await lease.proxy.ping();
+    const received: string[] = [];
+
+    eventSub.on((value) => {
+      received.push(value);
+    });
+
+    const requestResult = await Promise.race([
+      lease.proxy.who(),
+      sleep(50).then(() => "__timeout__"),
+    ]);
+    expect(requestResult).toBe("A");
+
+    serverA.events.ping("hello");
+    await sleep(10);
+
+    expect(received).toEqual(["hello"]);
+
+    eventSub.close();
   });
 
   it("broadcast query hits every live backend and returns ordered per-backend entries", async () => {
@@ -450,7 +509,7 @@ describe("NRPCBalancer", () => {
     expect(order[0]).toBe("broadcast");
   });
 
-  it("broadcast is queued ahead of already-queued lease work on a leased backend", async () => {
+  it("broadcast can use a leased backend while a leased subscription is active", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };
     const balancer = new NRPCBalancer();
@@ -465,26 +524,11 @@ describe("NRPCBalancer", () => {
     const sub = await lease.proxy.holdSub();
     await sub.next();
 
-    const order: string[] = [];
-    const queued = lease.proxy.work(1).then((value) => {
-      order.push("work");
-      return value;
-    });
-    const broadcast = other.client.broadcast.who().then((value) => {
-      order.push("broadcast");
-      return value;
-    });
-
-    await sleep(20);
-    expect(order).toEqual([]);
-
-    await sub.return(undefined);
-
-    await expect(broadcast).resolves.toEqual([
+    await expect(other.client.broadcast.who()).resolves.toEqual([
       { backendId: "A", type: "result", value: "A" },
     ]);
-    await expect(queued).resolves.toBe("A:1");
-    expect(order[0]).toBe("broadcast");
+
+    await sub.return(undefined);
   });
 
   it("backend close during broadcast yields an error entry for that backend and result entries for the others", async () => {
