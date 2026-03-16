@@ -179,6 +179,36 @@ describe("NRPCBalancer", () => {
     await expect(lease.proxy.who()).resolves.toBe("A");
   });
 
+  it("counts only idle unleased backends as available", async () => {
+    const processed: number[] = [];
+    const aborts = { value: 0 };
+    const balancer = new NRPCBalancer();
+
+    const serverA = new NRPCServer(createTestRouter(processed, aborts));
+    const serverB = new NRPCServer(createTestRouter(processed, aborts));
+
+    addBackend(balancer, serverA, { name: "A" }, "A");
+    addBackend(balancer, serverB, { name: "B" }, "B");
+
+    expect(balancer.getAvailableBackendCount()).toBe(2);
+
+    const owner = createClient<typeof serverA.router>(balancer);
+    const pooled = createClient<typeof serverA.router>(balancer);
+
+    const lease = await owner.client.reserveBackend();
+    expect(balancer.getAvailableBackendCount()).toBe(1);
+
+    const pending = pooled.client.proxy.delayedWho(40);
+    await sleep(10);
+    expect(balancer.getAvailableBackendCount()).toBe(0);
+
+    await expect(pending).resolves.not.toBe(lease.bid);
+    expect(balancer.getAvailableBackendCount()).toBe(1);
+
+    await lease.release();
+    expect(balancer.getAvailableBackendCount()).toBe(2);
+  });
+
   it("supports multiple simultaneous reservations on one connection", async () => {
     const processed: number[] = [];
     const aborts = { value: 0 };

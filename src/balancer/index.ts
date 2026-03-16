@@ -261,6 +261,24 @@ export class NRPCBalancer {
     };
   }
 
+  getAvailableBackendCount(): number {
+    let count = 0;
+
+    for (const backend of this.#backends.values()) {
+      if (
+        backend.alive &&
+        !backend.closed &&
+        !backend.busy &&
+        !backend.lease &&
+        !backend.paused
+      ) {
+        count += 1;
+      }
+    }
+
+    return count;
+  }
+
   async #runBackendWorker(backend: BackendState) {
     while (!backend.closed) {
       await this.#waitForBackendReady(backend);
