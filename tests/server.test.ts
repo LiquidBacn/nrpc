@@ -145,6 +145,38 @@ describe("NRPCServer", () => {
 
       expect(lastVal).toBe(6);
     });
+
+    it("works with NRPCPromise.on for events", async () => {
+      const eventRouter = router((c) => c, {
+        test: event<number>(),
+      });
+      const server = new NRPCServer(eventRouter);
+
+      const caller = server.getLocalCaller(undefined).proxy;
+
+      const test = await caller.test().on((val) => {
+        if (val > 5) {
+          test.close();
+        }
+        lastVal = val;
+      });
+
+      let lastVal: undefined | number = undefined;
+
+      for (let i = 0; i < 10; i++) {
+        server.events.test(i);
+      }
+
+      expect(lastVal).toBe(6);
+    });
+
+    it("works with NRPCPromise.on for queries", async () => {
+      const caller = server.getLocalCaller({ kind: "test" }).proxy;
+      const result = await new Promise<string>((res) => {
+        caller.getGreeting().on(res);
+      });
+      expect(result).toBe("Hello user123!");
+    });
   });
 
   describe("getConnection()", () => {

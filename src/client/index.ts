@@ -12,6 +12,7 @@ type Call = {
   rej: (err?: any) => void;
   back: number;
   bid?: string;
+  cb?: (value: any) => void | PromiseLike<void>;
 };
 
 type Sub = {
@@ -77,8 +78,10 @@ export function getClient<R extends Router>(
 
   const nextMessageId = () => `nrpc_${nextId++}`;
 
-  const addBid = <T extends { id: string; type: string }>(msg: T, bid?: string) =>
-    bid ? { ...msg, bid } : msg;
+  const addBid = <T extends { id: string; type: string }>(
+    msg: T,
+    bid?: string,
+  ) => (bid ? { ...msg, bid } : msg);
 
   const send = async (msg: NRPCRequest) => {
     if (paused || toDrain.length) {
@@ -283,6 +286,12 @@ export function getClient<R extends Router>(
               ),
             ).catch(() => {});
           },
+          (cb) => {
+            const item = inFlight.get(id);
+            if (item && !item.cb) {
+              item.cb = cb;
+            }
+          },
         );
       },
     });
@@ -302,6 +311,9 @@ export function getClient<R extends Router>(
         if (call) {
           inFlight.delete(t.id);
           call.res(t.payload);
+          if (typeof call.cb === "function") {
+            call.cb(t.payload);
+          }
         }
         break;
       }
@@ -390,6 +402,14 @@ export function getClient<R extends Router>(
           });
           inFlight.delete(t.id);
           call.res(gen);
+
+          if (typeof call.cb === "function") {
+            (async () => {
+              for await (let val of gen) {
+                await call.cb!(val);
+              }
+            })();
+          }
         }
         break;
       }
@@ -447,6 +467,9 @@ export function getClient<R extends Router>(
             on: (cb: (value: any) => void) => callbacks.add(cb),
             close,
           });
+          if (typeof call.cb === "function") {
+            callbacks.add(call.cb);
+          }
         }
         break;
       }

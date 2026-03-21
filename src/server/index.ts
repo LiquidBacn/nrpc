@@ -108,6 +108,8 @@ export class NRPCServer<R extends Router<any, any, any>> {
         },
         apply: (_, t, args) => {
           const controller = new AbortController();
+          let onCb: ((value: any) => void | PromiseLike<void>) | undefined =
+            undefined;
           return new NRPCPromise(
             async (res, rej) => {
               try {
@@ -126,6 +128,9 @@ export class NRPCServer<R extends Router<any, any, any>> {
                       v = route.validator.parse(arg);
                     }
                     rt = await route.method(c, v, signal);
+                    if (typeof onCb === "function") {
+                      onCb(rt);
+                    }
                     break;
                   }
                   case "s": {
@@ -136,6 +141,13 @@ export class NRPCServer<R extends Router<any, any, any>> {
                       v = route.validator.parse(arg);
                     }
                     rt = await route.method(c, v);
+                    if (typeof onCb === "function") {
+                      (async () => {
+                        for await (let val of rt) {
+                          await onCb(val);
+                        }
+                      })();
+                    }
                     break;
                   }
                   case "e": {
@@ -160,6 +172,7 @@ export class NRPCServer<R extends Router<any, any, any>> {
                       on: (cb: (value: any) => void) => callbacks.add(cb),
                       close,
                     } as EventProp<any>;
+                    if (typeof onCb === "function") callbacks.add(onCb);
                     break;
                   }
                   case "r": {
@@ -174,6 +187,9 @@ export class NRPCServer<R extends Router<any, any, any>> {
             },
             () => {
               controller.abort();
+            },
+            (cb) => {
+              if (!onCb) onCb = cb;
             },
           );
         },

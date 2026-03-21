@@ -6,7 +6,7 @@ export type EventProp<O> = {
 };
 
 export type EventToProp<T extends Event> =
-  T extends Event<infer O> ? () => Promise<EventProp<O>> : never;
+  T extends Event<infer O> ? () => NRPCPromise<EventProp<O>, O> : never;
 
 export type SubToProp<T extends Subscription> =
   T extends Subscription<any, infer V, infer O> ?
@@ -14,20 +14,21 @@ export type SubToProp<T extends Subscription> =
      * @param inp Input data for the subscription
      * @param backPressure Has a default of 10
      */
-    (inp: V, backPressure?: number) => Promise<AsyncGenerator<O>>
+    (inp: V, backPressure?: number) => NRPCPromise<AsyncGenerator<O>, O>
   : never;
 
 export type QueryToProp<T extends Query> =
-  T extends Query<any, infer V, infer O> ? (inp: V) => NRPCPromise<O> : never;
+  T extends Query<any, infer V, infer O> ? (inp: V) => NRPCPromise<O, O>
+  : never;
 
 export type BroadcastResult<T> =
   | { backendId: string; type: "result"; value: T }
   | { backendId: string; type: "error"; error: any };
 
 export type BroadcastQueryToProp<T extends Query> =
-  T extends Query<any, infer V, infer O>
-    ? (inp: V) => NRPCPromise<BroadcastResult<O>[]>
-    : never;
+  T extends Query<any, infer V, infer O> ?
+    (inp: V) => NRPCPromise<BroadcastResult<O>[]>
+  : never;
 
 export type RouterToProp<T extends Router> =
   T extends Router ? RoutesToProxy<T["routes"]> : never;
