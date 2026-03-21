@@ -117,9 +117,7 @@ if (isMainThread) {
 
     let done = Promise.withResolvers<void>();
     let events = 0;
-    let eventTest = await client.proxy.eventTest();
-
-    eventTest.on((val) => {
+    await client.proxy.eventTest().on((val) => {
       console.log("Event:", val);
       events++;
 

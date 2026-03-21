@@ -639,4 +639,29 @@ describe("Event System", () => {
 
     sub.close();
   });
+
+  it("works with NRPCPromise.on", async () => {
+    const { router, query, event } = await import("../src/shared/index.ts");
+    const testRouter = router((ctx: any) => ctx, {
+      userUpdate: event<{ userId: string; name: string }>(),
+    });
+
+    const pair = createLocalTestPair(testRouter, { kind: "test" });
+
+    const received: { userId: string; name: string }[] = [];
+    const subscription = await pair.client.proxy.userUpdate().on((data) => {
+      received.push(data);
+    });
+
+    pair.server.events.userUpdate({ userId: "1", name: "Alice" });
+    pair.server.events.userUpdate({ userId: "2", name: "Bob" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(received).toHaveLength(2);
+    expect(received[0]).toEqual({ userId: "1", name: "Alice" });
+    expect(received[1]).toEqual({ userId: "2", name: "Bob" });
+
+    subscription.close();
+  });
 });
