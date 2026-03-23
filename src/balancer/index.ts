@@ -262,21 +262,29 @@ export class NRPCBalancer {
   }
 
   getAvailableBackendCount(): number {
-    let count = 0;
+    return this.getBackendStats().free;
+  }
+
+  getBackendStats() {
+    let rt = {
+      total: 0,
+      leased: 0,
+      free: 0,
+    };
 
     for (const backend of this.#backends.values()) {
-      if (
-        backend.alive &&
-        !backend.closed &&
-        !backend.busy &&
-        !backend.lease &&
-        !backend.paused
-      ) {
-        count += 1;
+      if (backend.alive && !backend.closed) {
+        rt.total += 1;
+
+        if (backend.lease) {
+          rt.leased += 1;
+        } else if (!backend.busy && !backend.paused) {
+          rt.free += 1;
+        }
       }
     }
 
-    return count;
+    return rt;
   }
 
   async #runBackendWorker(backend: BackendState) {
@@ -709,10 +717,7 @@ export class NRPCBalancer {
     await this.#handleLeasedBackendMessage(backend, t);
   }
 
-  async #handleLeasedBackendMessage(
-    backend: BackendState,
-    msg: NRPCResponse,
-  ) {
+  async #handleLeasedBackendMessage(backend: BackendState, msg: NRPCResponse) {
     const lease = backend.lease;
     if (!lease || lease.backendId !== backend.id) {
       return;
@@ -1110,11 +1115,7 @@ export class NRPCBalancer {
       return;
     }
 
-    await this.#finalizeLease(
-      backend,
-      lease,
-      lease.pendingReleaseRequestId,
-    );
+    await this.#finalizeLease(backend, lease, lease.pendingReleaseRequestId);
   }
 
   #hasLeasedInFlightRequests(backend: BackendState, lease: LeaseState) {
