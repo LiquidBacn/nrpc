@@ -34,7 +34,8 @@
   },
   "scripts": {
     "build": "vite build && tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
