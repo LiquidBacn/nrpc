@@ -1,2 +1,8 @@
 tests
 example.ts
+.vscode
+src
+AGENTS.md
+tsconfig.json
+vite.config.js
+package-lock.json
