@@ -401,14 +401,19 @@ export function getClient<R extends Router>(
             bid,
           });
           inFlight.delete(t.id);
-          call.res(gen);
 
           if (typeof call.cb === "function") {
             (async () => {
-              for await (let val of gen) {
-                await call.cb!(val);
+              try {
+                for await (let val of gen) {
+                  await call.cb!(val);
+                }
+              } catch (error) {
+                call.rej(error);
               }
             })();
+          } else {
+            call.res(gen);
           }
         }
         break;
