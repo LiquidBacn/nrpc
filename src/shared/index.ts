@@ -66,6 +66,12 @@ export class NRPCPromise<T, I = T> extends Promise<T> {
    * 1. If the request is to a `query`, the callback will be called with the resolved value.
    * 2. If the request is to a `subscription`, the callback will be called for each item in the subscription.
    * 3. If the request is to a `event`, the callback will be called for every event.
+   *
+   * ## Note
+   *
+   * If used on a `subscription`, the Promise will resolve to `undefined` *after* the subscription completes.
+   *
+   * If the subscription throws, the Promise will reject with the error.
    */
   on(cb: (value: I) => void | PromiseLike<void>) {
     this.#onCb(cb);

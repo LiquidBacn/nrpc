@@ -408,6 +408,7 @@ export function getClient<R extends Router>(
                 for await (let val of gen) {
                   await call.cb!(val);
                 }
+                call.res(undefined);
               } catch (error) {
                 call.rej(error);
               }
